@@ -1,0 +1,1 @@
+For BioTIMES 2.0, they recommend "sample-level rarefaction to ensure consistent sampling effort through time before calculating any diversity metric." - NEED TO DO THIS!
