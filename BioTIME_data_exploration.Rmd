@@ -10,6 +10,7 @@ library(tidyverse)
 
 ```{r}
 #tmp = read.csv("BioTIMEQuery_24_06_2021.csv")
+# NEED TO REPLACE THE tmp WITH THE MORE RELEVANT CSV FILE UPDATED
 #save(tmp, file = "BioTIME_data.RData")
 load("BioTIME_data.RData")
 ```
