@@ -1,5 +1,6 @@
 ---
 title: "R Notebook"
+author: "Stanley Tan (original), Eli Duggan (edits)"
 output: html_notebook
 ---
 

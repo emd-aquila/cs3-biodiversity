@@ -1,0 +1,157 @@
+---
+title: "BioTIME Taxonomic Classification (Full Hierarchy)"
+author: "Eli Duggan"
+date: "2025-06-14"
+output: html_document
+---
+
+# 1. Setup Packages
+```{r setup, include=FALSE}
+pkgs <- c("devtools", "taxize", "stringr", "dplyr", "purrr", "readr", "tibble", "progress", "ratelimitr", "memoise", "vroom")
+to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(to_install)) install.packages(to_install)
+
+library(devtools)
+library(taxize)
+library(stringr)
+library(dplyr)
+library(purrr)
+library(readr)
+library(tibble)
+library(progress)
+library(ratelimitr)
+library(memoise)
+library(vroom)
+```
+
+# 2. Load input data
+```{r}
+input_file <- "../data/unique_genus_species_biotime.csv"
+df_species <- vroom(input_file)
+species_list <- df_species$genus_species
+```
+
+# 3. Taxonomic Query Engine
+```{r}
+databases <- c("ncbi", "col", "gbif", "worms", "itis")
+taxize_rate <- limit_rate(classification, rate(n = 5, period = 1))
+cache_file <- "../cache/classification_cache_full.rds"
+
+if (file.exists(cache_file)) {
+  classification_cache <- readRDS(cache_file)
+} else {
+  classification_cache <- list()
+}
+```
+
+# 4. Full classification resolver function (multi-rank)
+```{r}
+# Memoized + rate-limited API query
+classification_cached <- memoise(function(name, db) {
+  suppressWarnings({
+    res <- taxize_rate(name = name, db = db, rows = 1)
+    if (inherits(res, "classification")) return(res)
+    return(NULL)
+  })
+})
+
+# Attempt classification from species name or genus fallback
+query_full_classification <- function(name) {
+  for (db in databases) {
+    classif <- classification_cached(name, db)
+    if (!is.null(classif) && nrow(classif[[1]]) > 0) {
+      ranks <- classif[[1]] %>% select(rank, name)
+      tax_levels <- tibble(
+        kingdom = ranks %>% filter(rank == "kingdom") %>% pull(name) %>% first(),
+        phylum = ranks %>% filter(rank == "phylum") %>% pull(name) %>% first(),
+        class = ranks %>% filter(rank == "class") %>% pull(name) %>% first(),
+        order = ranks %>% filter(rank == "order") %>% pull(name) %>% first(),
+        family = ranks %>% filter(rank == "family") %>% pull(name) %>% first(),
+        genus = ranks %>% filter(rank == "genus") %>% pull(name) %>% first(),
+        db = db
+      )
+      return(tax_levels)
+    }
+  }
+  return(tibble(kingdom=NA, phylum=NA, class=NA, order=NA, family=NA, genus=NA, db="not_found"))
+}
+
+# Master resolver: try species → genus fallback
+resolve_taxonomy <- function(fullname) {
+  res <- query_full_classification(fullname)
+  if (!is.na(res$class)) return(res)
+  genus <- strsplit(fullname, " ")[[1]][1]
+  res_genus <- query_full_classification(genus)
+  return(res_genus)
+}
+```
+
+# 5. Apply classification with caching
+```{r}
+pb <- progress_bar$new(total = length(species_list), format = "[:bar] :percent eta: :eta")
+
+results <- map(species_list, function(sp) {
+  pb$tick()
+  if (!is.null(classification_cache[[sp]])) {
+    return(classification_cache[[sp]])
+  }
+  res <- safely(resolve_taxonomy)(sp)
+  classification_cache[[sp]] <<- res$result
+  Sys.sleep(0.2)
+  return(res$result)
+})
+
+saveRDS(classification_cache, cache_file)
+
+final_df <- tibble(
+  genus_species = species_list,
+  kingdom = map_chr(results, ~ .x$kingdom),
+  phylum  = map_chr(results, ~ .x$phylum),
+  class   = map_chr(results, ~ .x$class),
+  order   = map_chr(results, ~ .x$order),
+  family  = map_chr(results, ~ .x$family),
+  genus   = map_chr(results, ~ .x$genus),
+  assigned_db = map_chr(results, ~ .x$db)
+)
+```
+
+# 6. Save outputs
+```{r}
+# Split classified vs unclassified
+classified <- final_df %>% filter(!is.na(taxonomic_class) & assigned_db != "not_found")
+unclassified <- final_df %>% filter(is.na(taxonomic_class) | assigned_db == "not_found")
+
+# Write outputs
+write_csv(classified, "../data/class_assigned.csv")
+write_csv(unclassified, "../data/unclassified_species.csv")
+
+# Output summary
+cat("Classification complete.\n")
+cat("Classified taxa:", nrow(classified), "\n")
+cat("Unclassified taxa:", nrow(unclassified), "\n")
+```
+
+# 7. Merge taxonomy into full resolved dataset
+```{r}
+cat("Merging full taxonomy into resolved BioTIME data\n")
+
+df_filtered <- vroom("../data/filtered_resolved_biotimes.csv", show_col_types = FALSE)
+df_taxonomy <- vroom("../data/full_taxonomy_assigned.csv", show_col_types = FALSE)
+
+# Merge by resolved_name (which is genus_species)
+df_merged <- df_filtered %>%
+  left_join(df_taxonomy, by = c("resolved_name" = "genus_species"))
+
+unmatched <- df_merged %>% filter(is.na(class))
+cat("Unmatched after taxonomy merge:", nrow(unmatched), "\n")
+
+write_csv(df_merged, "../data/filtered_resolved_biotimes_with_taxonomy.csv")
+cat("Merged final dataset with full taxonomy written.\n")
+```
+
+
+# Debugging
+```{r}
+bird_df <- vroom("../data/IBP-AOS-LIST24.csv", show_col_types = FALSE)
+problems(bird_df)
+```
