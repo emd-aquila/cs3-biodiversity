@@ -2,5 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
-.rds
-.tsv
+*.json
+canopy/
+deprecated/
+biotime_pipeline/data
