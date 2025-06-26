@@ -1,2 +1,1 @@
-biotime_pipeline/input_files/taxon.rds filter=lfs diff=lfs merge=lfs -text
-biotime_pipeline/input_files/biotime_v2_query_15April25.rds filter=lfs diff=lfs merge=lfs -text
+*.rds filter=lfs diff=lfs merge=lfs -text
