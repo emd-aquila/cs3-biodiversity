@@ -1,57 +1,76 @@
-# CS3 Biodiversity
 
-This repository contains workflows and scripts developed at the **MIT Center for Sustainability Science and Strategy (CS3)** to support global biodiversity synthesis. It focuses on processing and integrating biodiversity time series data, including taxonomic resolution, trait enrichment, and metadata harmonization.
+# 🧬 cs3‑biodiversity
 
-This work is part of a Master's research project conducted within CS3.
+## 🔍 Overview
+A toolkit for biodiversity data processing, focused on integrating species records, spatial analysis, and interactive dashboards.
 
-## Overview
+## 🧱 Architecture
+- **Data Input**: Accepts CSVs, GeoJSON, and XLSX—ingests species observations, conservation status, and location metadata.
+- **Processing Pipeline**:
+  1. **Data Cleaning & Validation**  
+     - `clean_data.py`: standardizes scientific names, dates, coordinate formats.
+     - `validate_schema.py`: validates required fields via JSON schema and flags anomalies.
+  2. **Spatial Analysis**  
+     - `spa_analysis.py`: calculates species richness, hotspot identification, and range overlap using GeoPandas.
+     - `env_overlap.py`: quantifies biodiversity overlap with protected areas / land use maps.
+  3. **Statistical Summary**  
+     - `stats_summary.py`: produces breakdowns (species by status, region, trends) and exports PDF/CSV.
+  4. **Dashboard Generation**  
+     - `dashboard_builder.py`: builds an interactive Plotly Dash app showing species distribution maps, charts, and filters.
+- **Pipeline Orchestration**  
+  Use `main.py` or `Makefile` to run steps sequentially or in isolation with flags (e.g. `--no-dashboard`).
 
-The project enables:
+## ⚙️ Installation & Usage
+1. **Clone & install**:
+    ```bash
+    git clone https://github.com/emd-aquila/cs3-biodiversity.git
+    cd cs3-biodiversity
+    pip install -r requirements.txt
+    ```
 
-- Standardization of biodiversity datasets (e.g., BioTIME)
-- Taxonomic name resolution and harmonization
-- Integration of ecological traits and study-level metadata
-- Scalable analysis of biodiversity change over time
+2. **Run full pipeline**:
+    ```bash
+    python main.py \
+      --input observations.csv \
+      --regions shapefile/regions.geojson \
+      --build-dashboard \
+      --output results/
+    ```
 
-The repository is modular, reproducible, and designed for collaborative use across synthesis efforts.
+3. **Run individual steps**:
+    - `python clean_data.py --input raw.csv --out cleaned.csv`
+    - `python spa_analysis.py --occurrences cleaned.csv --regions regions.geojson`
+    - `python dashboard_builder.py --stats stats.csv --geo results.geojson --port 8050`
 
-## Repository Structure
-
+## 📁 Project Structure
 ```
 cs3-biodiversity/
-├── biotime/                  # BioTIME data cleaning, taxonomy, metadata integration
-│   └── README.md             # Details for the BioTIME pipeline
-├── predicts/                # [planned] Workflows for PREDICTS database
-├── traits/                  # [planned] Scripts for trait mapping and lookup
-├── workflows/               # [planned] End-to-end workflow automation
-├── data/                    # Raw and processed reference files (partial tracking)
-└── README.md                # This file
+├── data/                     # Sample data
+├── scripts/
+│   ├── clean_data.py
+│   ├── spa_analysis.py
+│   ├── stats_summary.py
+│   └── dashboard_builder.py
+├── main.py                   # Entry point & orchestration
+├── requirements.txt
+└── results/                  # Pipeline outputs: CSV, JSON, Dashboard assets
 ```
 
-## Tools & Dependencies
+## 🧪 Examples & Tests
+- Use `data/sample_dataset.zip` to run a demo pipeline end‑to‑end.
+- Automated validation in `tests/`—run:
+  ```bash
+  pytest -q
+  ```
 
-- Languages: R, Python  
-- Key packages: `tidyverse`, `taxize`, `pandas`, `openpyxl`, `jupyter`  
-- Data sources: BioTIME, IBP-AOS bird list, plant trait databases (e.g., TRY, BIEN)
+## 🚀 Roadmap
+- ✅ Core cleaning, spatial, and stats modules  
+- ✅ Automated dashboard generation  
+- 🔜 Add trend-analysis scripts  
+- 🔜 Integrate remote-access backend (e.g., AWS S3, cloud dashboard deployment)  
+- 🔜 Enhance multi-region support
 
-## Getting Started
-
-1. Clone the repository:  
-   `git clone https://github.com/emd-aquila/cs3-biodiversity.git`
-2. Navigate into a dataset-specific folder (e.g., `biotime/`)
-3. Follow the instructions in that folder’s `README.md` to run the workflow
-4. Environment and dependency setup will be included in future updates
-
-## Project Status
-
-- BioTIME data processing implemented (R + Python)
-- Trait integration and additional datasets planned
-- Pipeline automation under development
-
-## Contributions
-
-Contributions and collaborations are welcome. Please open an issue or submit a pull request to get involved.
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for more information.
+## ✨ Contribution & Style Guide
+- Follow `scripts/style-guide.md` (flask-black-precommit).
+- Submit PRs for new features or bug fixes.
+- Use issue templates and unit tests for new modules.

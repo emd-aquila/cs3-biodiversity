@@ -1,0 +1,792 @@
+---
+title: "R Notebook"
+author: "Stanley Tan (original), Eli Duggan (edits)"
+output: html_notebook
+---
+
+<!-- This script, developed by Stanley (originally "script.Rmd"), contains code on  -->
+<!-- the development of indicator component scores and the integration of scores.  -->
+<!-- Coordinates are also added. -->
+
+
+# library
+```{r}
+library(tidyverse)
+```
+
+
+# load data
+```{r}
+tmp1 <- read_csv("merged_df_raw.csv")
+```
+
+# filter for only abundance-based studies 
+```{r}
+tmp1ab <- tmp1 %>%
+  select(Biome, Predominant_land_use,
+         Use_intensity, Kingdom:Genus,
+         Diversity_metric, Diversity_metric_type,
+         Effort_corrected_measurement,
+         Reference, Site_name, Site_number) %>%
+  filter(Diversity_metric_type == "Abundance") %>%
+  select(-Diversity_metric, -Diversity_metric_type)
+```
+
+# phylogenetic diversity analysis
+```{r}
+tmp2 <- tmp1ab %>%
+  select(Reference, Site_number,
+         Kingdom:Genus, Effort_corrected_measurement) %>%
+  filter(Effort_corrected_measurement != 0) %>%
+  mutate(combined_tax = paste(Kingdom, Phylum,
+                              Class, Order,
+                              Family, Genus, sep=","))
+```
+
+export a list of family names delimited by comma for upload into phyloT
+```{r}
+exp1 <- tmp2 %>%
+  select(Family) %>%
+  distinct() 
+write.table(exp1$Family, file = "family_names.txt", sep = ",", row.names = FALSE, col.names = FALSE, quote = FALSE)
+```
+
+```{r}
+unmatched_names <- c("Napoleonaceae", "Carcinophoridae", "Aphodiidae", "Rhipiphoridae", "Oriolidae", 
+                  "Melolonthidae", "Cephalotaxaceae", "Cetoniidae", "Troglodytidae", "Emberizidae", 
+                  "Anobiidae", "Scydmaenidae", "Coerebidae", "Corytophanidae", "Xanthorrhoeaceae", 
+                  "Cracticidae", "Eumenidae", "Aromobatidae", "Agoutidae", "Callitrichidae", 
+                  "Neosittidae", "Pangrolaimidae", "Paratropididae", "Viduidae", "Aegithinidae", 
+                  "Tropiduridae", "Protoribatidae", "Arctiidae", "Lymantriidae", "Cyphoderidae", 
+                  "Melianthaceae", "Dynastidae", "Pteroclididae", "Dryophthoridae", "Opluridae", 
+                  "Chrysothricaceae", "Not assigned", "Masaridae", "Austrachipteriidae", "Ptilocercidae", 
+                  "Ptilogonatidae", "Languriidae", "Hemiprocnidae", "Bankeraceae", "Phallogastraceae", 
+                  "Corethrellidae", "Indridae", "Symmocidae", "Rhyscotidae", "Ascalaphidae", 
+                  "Tubiferaceae", "Scoliciosporaceae", "Cinclidotaceae", "Taenitidaceae", "Ganodermataceae", 
+                  "Cantacaderidae", "Epimerellidae", "Biatorellaceae", "Eupetidae", "Remizidae", 
+                  "Rutelidae", "Thyrisomidae", "Oxydiridae", "Rhynchitidae", "Heterozetidae", 
+                  "Stemonitidaceae", "Anomalepidae", "Pudeoniscidae", "Odontorhabditidae", "Labidostommidae", 
+                  "Laelaptidae", "Pleuroziopsaceae", "Charipidae", "Paraphelenchidae", "Myoxidae", 
+                  "Microzetidae", "Aleurodamaeidae", "Plateremaeidae", "Spinozetidae", "NA")
+
+exp1 <- exp1 %>% 
+  filter(!Family %in% unmatched_names) # removing families that are not matched in the database
+
+write.table(exp1$Family, file = "family_names.txt", sep = ",", row.names = FALSE, col.names = FALSE, quote = FALSE) # export to generate phylotree
+```
+
+```{r}
+# prepare community matrix for derivation of phylogenetic distance scores
+community_matrix <- tmp2 %>%
+  select(Reference, Site_number, Family, Effort_corrected_measurement) %>%
+  mutate(site = paste(Reference, Site_number, sep="_")) %>%
+  select(site, Family, Effort_corrected_measurement) %>%
+  group_by(site, Family) %>%
+  summarize(sum = sum(Effort_corrected_measurement)) %>%
+  pivot_wider(names_from = site, values_from = sum) %>%
+  t()
+
+colnames(community_matrix) <- community_matrix[1,]
+cd <- community_matrix[-1,] %>%
+  as.data.frame()
+cd <- as.data.frame(apply(cd, 2, as.numeric))
+
+community_matrix_small <- community_matrix[1:100,1:100]  
+cd_small <- cd[1:200,c(1:30)]
+
+desired_rownames <- rownames(community_matrix)[2:22755]
+rownames(cd) <- desired_rownames
+cd <- cd[, !is.na(names(cd)) & names(cd) != ""]
+cd <- cd %>% mutate(across(everything(), ~ replace_na(., 0)))
+cd <- cd %>% mutate(across(everything(), ~ round(., 0)))
+colnames(cd) <- paste0("f__", colnames(cd))
+
+install.packages("ape")
+install.packages("picante")l
+library(ape); library(picante)
+phylo_tree <- read.tree("iphylo_tree.nwk") # import and read tree
+family_names <- colnames(cd)
+pruned_tree <- drop.tip(phylo_tree, setdiff(phylo_tree$tip.label, family_names)) # drop unmatched families
+mismatched_columns <- !(colnames(cd) %in% pruned_tree$tip.label)
+mismatched_names <- colnames(cd)[mismatched_columns]
+cd <- cd[, !mismatched_columns]
+
+pd_result <- pd(samp =cd, 
+                tree = pruned_tree, 
+                include.root = TRUE) # generate phylogenetic diversity scores
+
+print(pd_result)
+```
+
+```{r}
+# export pd scores
+write.csv(pd_result, file = "pd_result.csv", row.names = TRUE)
+```
+
+
+# calculating shannon species richness
+```{r}
+tmp2 <- tmp1ab %>%
+  select(Reference, Site_number,Family,
+         Genus, Effort_corrected_measurement) %>%
+  filter(Effort_corrected_measurement != 0) %>%
+  group_by(Reference, Site_number, Family, Genus) %>%
+  summarize(sum= sum(Effort_corrected_measurement)) %>%
+  mutate(sum = round(sum,0)) %>%
+  ungroup() %>%
+  group_by(Reference, Site_number) %>%
+  mutate(site_total = sum(sum)) %>%
+  ungroup() %>%
+  mutate(taxon_prop = sum/site_total) %>%
+  mutate(ln_taxon_prop = log(taxon_prop)) %>%
+  mutate(prop_lnprop = taxon_prop*ln_taxon_prop) %>%
+  group_by(Reference, Site_number) %>%
+  select(Reference, Site_number, prop_lnprop) %>%
+  summarize(shannon_rich = sum(prop_lnprop)*-1) %>%
+  mutate(ref_site = paste(Reference, Site_number, sep="_"))%>%
+  ungroup() %>%
+  select(ref_site, shannon_rich)
+
+shann_rich <- tmp2
+```
+
+## extra check:  number of studies that form abundance
+
+```{r}
+tmp <- tmp1 %>%
+  select(Reference, Site_number, Diversity_metric_type) %>%
+  distinct()
+
+table1 <- table(tmp$Diversity_metric_type)
+print(table1) # by sites
+```
+
+```{r}
+tmp <- tmp1 %>%
+  select(Reference, Diversity_metric_type) %>%
+  distinct()
+
+table1 <- table(tmp$Diversity_metric_type)
+print(table1) # by sites
+```
+
+# calculating habitat quality
+
+```{r}
+tmp2 <- tmp1ab %>%
+  select(Reference, Site_number,
+         Biome, Predominant_land_use,
+         Use_intensity) %>%
+  mutate(study_site = paste(Reference, Site_number, sep = "_")) %>%
+  distinct() %>%
+  select(study_site, Biome, Predominant_land_use, Use_intensity) %>%
+  mutate(lu_score = 0) %>%
+  filter(Predominant_land_use != "Cannot decide")
+  
+# assign scores based on current land use
+if (ncol(tmp2) >= 5) {
+  condition <- tmp2[, 2] %in% c("Mature secondary vegetation",
+                                "Secondary vegetation (indeterminate age)",
+                                "Intermediate secondary vegetation",
+                                "Primary vegetation",
+                                "Young secondary vegetation")
+    tmp2[, 5] <- ifelse(condition, 3, 1)
+} else {
+  warning("df does not have correct columns")
+}
+
+tmp2 <- tmp2 %>%
+  filter(Use_intensity != "Cannot decide") %>%
+  mutate(ui_score = 0)
+
+# assign scores based on use intensity
+for(i in 1:nrow(tmp2)){
+  if(tmp2[i,4] == "Minimal use"){
+    tmp2[i,6] = -0.1
+  }
+  if(tmp2[i,4] == "Light use"){
+    tmp2[i,6] = -0.3
+  }
+  if(tmp2[i,4] == "Intense use"){
+    tmp2[i,6] = -0.5
+  }
+}
+
+tmp2 <- tmp2 %>%
+  mutate(hq_score = lu_score + ui_score)
+
+hqi_score = tmp2 %>%
+  select(study_site, hq_score)
+```
+
+# HANPP
+
+```{r}
+tmp2 <- tmp1ab %>%
+  select(Reference, Site_number,
+         Biome, Predominant_land_use, Use_intensity) %>%
+  mutate(ref_site = paste(Reference, Site_number, sep="_")) %>%
+  select(-Reference, -Site_number) %>%
+  distinct() %>%
+  select(ref_site, Biome, Predominant_land_use, 
+         Use_intensity) %>%
+  mutate(bl_prod = "TBC",
+         app_prod = "TBC")
+  
+condition <- tmp2$Biome %in% c(
+  "Tropical & Subtropical Moist Broadleaf Forests",
+  "Tropical & Subtropical Grasslands, Savannas & Shrublands",
+  "Tropical & Subtropical Dry Broadleaf Forests",
+  "Tropical & Subtropical Coniferous Forests",
+  "Mangroves")
+  tmp2$bl_prod <- ifelse(condition, "high", "TBC")
+    
+condition <- tmp2$Biome %in% c(
+  "Temperate Broadleaf & Mixed Forests",
+  "Mediterranean Forests, Woodlands & Scrub",
+  "Temperate Conifer Forests",
+  "Temperate Grasslands, Savannas & Shrublands",
+  "Flooded Grasslands & Savannas")
+  tmp2$bl_prod <- ifelse(condition, "medium", tmp2$bl_prod)
+    
+condition <- tmp2$Biome %in% c(
+    "Montane Grasslands & Shrublands",
+    "Deserts & Xeric Shrublands",
+    "Boreal Forests/Taiga",
+    "Tundra")
+    tmp2$bl_prod <- ifelse(condition, "low", tmp2$bl_prod)
+    
+# account for use_intensity
+app_prod_condition <- tmp2$Predominant_land_use %in% c(
+  "Mature secondary vegetation",
+  "Secondary vegetation (indeterminate age)",
+  "Intermediate secondary vegetation",
+  "Primary vegetation",
+  "Young secondary vegetation")
+    tmp2$app_prod <- ifelse(app_prod_condition, "low", "TBC")
+
+app_prod_condition <- tmp2$Predominant_land_use %in% c("Urban")    
+  
+#assign HANPP category based on land use and intensity
+tmp2$app_prod <- ifelse(app_prod_condition, "high", tmp2$app_prod)  
+  
+  app_prod_condition <- c(tmp2$Predominant_land_use %in% c("Cropland",
+                                                         "Plantation forest",
+                                                         "Pasture") & tmp2$Use_intensity %in% c("Minimal use",
+                                                                                                "Light use"))    
+  tmp2$app_prod <- ifelse(app_prod_condition, "low", tmp2$app_prod)  
+  
+app_prod_condition <- c(tmp2$Predominant_land_use %in% c("Cropland",
+                                                         "Plantation forest",
+                                                         "Pasture") & tmp2$Use_intensity %in% c("Intense use"))    
+  tmp2$app_prod <- ifelse(app_prod_condition, "high", tmp2$app_prod)  
+
+#just to see number of sites without land use    
+tmp3 <- tmp2 %>%
+  filter(Predominant_land_use == "Cannot decide") %>%
+  select(ref_site) %>%
+  distinct()
+
+
+hanpp_score <- tmp2 %>%
+  select(ref_site, app_prod)
+```
+
+
+# PDF
+by site instead, and columns will be classes present
+```{r}
+tmp2 <- tmp1 %>%
+  select(Reference, Site_number,
+         Kingdom, Phylum, Class, Order, Family, Genus,
+         Biome, Predominant_land_use,
+         Order, Effort_corrected_measurement,
+         Diversity_metric_type) %>%
+  mutate(ref_site = paste(Reference, Site_number, sep= "_"),
+         conversion = "undefined") %>%
+  filter(Predominant_land_use != "Cannot decide",
+         Diversity_metric_type == "Abundance")
+
+# projecting loss at class level
+tmp2b <- tmp2 %>%
+  select(ref_site, Class, Biome, Predominant_land_use, 
+         Effort_corrected_measurement)
+
+tmp2c <- tmp2b %>%
+  group_by(ref_site, Class, Biome, Predominant_land_use) %>%
+  summarize(total = sum(Effort_corrected_measurement)) %>%
+  mutate(total = round(total, 2),
+         lu = Predominant_land_use,
+         status = "pending") %>%
+  ungroup()
+
+
+if (ncol(tmp2c) >= 4) {
+  # Initialize the 6th column with the existing values from the 5th column
+  tmp2c[, 7] <- tmp2c[, 6]
+  
+  for (i in 1:nrow(tmp2c)) {
+    if (tmp2c[i, 6] == "Primary vegetation") {
+      tmp2c[i, 7] <- "primary baseline"
+    } else if (tmp2c[i, 6] %in% c("Young secondary vegetation",
+                                  "Intermediate secondary vegetation",
+                                  "Mature secondary vegetation",
+                                  "Secondary vegetation (indeterminate age)")) {
+      tmp2c[i, 7] <- "secondary baseline"
+    }
+  }
+}
+
+tmp2d <- tmp2c %>%
+  select(ref_site, Class, Biome, status, total) %>%
+  group_by(ref_site, Class, Biome, status) %>%
+  summarize(mean = mean(total, na.rm = T)) %>%
+  mutate(mean = round(mean, 0)) %>%
+# summarize for secondary baseline
+  group_by(ref_site, Class, Biome, status) %>%
+  pivot_wider(names_from = status, values_from = mean) %>%
+  # pivot out baselines to deduce change in values based on LUC
+  filter(!(is.na(`primary baseline`) & is.na(`secondary baseline`))) %>%
+  rename(`primary_b` = `primary baseline`,
+         `secondary_b` = `secondary baseline`) %>%
+  mutate(cropland_pri = (Cropland - primary_b)/(primary_b+0.0000001)*100, # adding 0.0000001 to avoid division by 0 leading to inf values
+         pasture_pri = (Pasture - primary_b)/(primary_b+0.0000001)*100,
+         plantation_pri = (`Plantation forest` - primary_b)/(primary_b+0.0000001)*100,
+         urban_pri = (Urban - primary_b)/(primary_b+0.0000001)*100,
+         cropland_sec = (Cropland - secondary_b)/(secondary_b+0.0000001)*100,
+         plantation_sec = (`Plantation forest` - secondary_b)/(secondary_b+0.0000001)*100,
+         pasture_sec = (Pasture - secondary_b)/(secondary_b+0.0000001)*100,
+         urban_sec = (Urban - secondary_b)/(secondary_b+0.0000001)*100,
+) %>%
+    mutate(across(c(cropland_pri, 
+                    pasture_pri,
+                    plantation_pri,
+                    urban_pri,
+                    cropland_sec,
+                    plantation_sec,
+                    pasture_sec,
+                    urban_sec), round, 0))
+
+tmp2d2 <- tmp2d
+
+# summing the changes and taking the mean for reduced dimensions
+tmp2d2$mean_avg<- rowMeans(tmp2d2[, (ncol(tmp2d2)-7):ncol(tmp2d2)], na.rm = T)
+
+# replacing NaN values with 0
+tmp2d2$mean_avg <- ifelse(is.nan(tmp2d2$mean_avg), 0, tmp2d2$mean_avg)
+
+tmp2d2 <- tmp2d %>%
+  group_by(ref_site, Biome) %>%
+  select(ref_site, Biome) %>%
+  distinct()
+
+# it seems there are sites that have more than one biome - let's take a look at them
+tmp2d2$ref_site <- trimws(tolower(tmp2d2$ref_site))
+
+duplicated_rows <- tmp2d2[duplicated(tmp2d2$ref_site) | duplicated(tmp2d2$ref_site, fromLast = TRUE), ]
+
+# let's identify these sites 
+unwanted_sites <- unique(duplicated_rows$ref_site)
+
+tmp2e <- tmp2d2[,c(1:3, 18)] %>%
+  ungroup() %>%
+  filter(is.na(Class) != TRUE) %>%
+  select(-Biome) %>%
+  filter(!(ref_site %in% unwanted_sites)) # removing these sites
+  
+  # the final step is to join the sites with the columns of abd change back to combined_scoresv2
+
+# continued  below at combined_scoresv2 area
+  
+```
+
+
+## Old PDF - by Class (above and below 80% loss in abundance)
+
+```{r}
+tmp2 <- tmp1 %>%
+  select(Reference, Site_number,
+         Kingdom, Phylum, Class, Order, Family, Genus,
+         Biome, Predominant_land_use,
+         Order, Effort_corrected_measurement,
+         Diversity_metric_type) %>%
+  mutate(Study_site = paste(Reference, Site_number, sep= "_"),
+         conversion = "undefined") %>%
+  filter(Predominant_land_use != "Cannot decide",
+         Diversity_metric_type == "Abundance")
+
+# projecting loss at class
+tmp2b <- tmp2 %>%
+  select(Class, Biome, Predominant_land_use, 
+         Effort_corrected_measurement) %>%
+  group_by(Class, Biome, Predominant_land_use) %>%
+  summarize(total = sum(Effort_corrected_measurement)) %>%
+  mutate(total = round(total, 2),
+         lu = Predominant_land_use,
+         status = "pending") %>%
+  ungroup()
+
+if (ncol(tmp2b) >= 4) {
+  # Initialize the 6th column with the existing values from the 5th column
+  tmp2b[, 6] <- tmp2b[, 5]
+  
+  for (i in 1:nrow(tmp2b)) {
+    if (tmp2b[i, 5] == "Primary vegetation") {
+      tmp2b[i, 6] <- "primary baseline"
+    } else if (tmp2b[i, 5] %in% c("Young secondary vegetation",
+                                  "Intermediate secondary vegetation",
+                                  "Mature secondary vegetation",
+                                  "Secondary vegetation (indeterminate age)")) {
+      tmp2b[i, 6] <- "secondary baseline"
+    }
+  }
+}
+
+tmp2c <- tmp2b %>%
+  select(Class, Biome, status, total) %>%
+  group_by(Class, Biome, status) %>%
+  summarize(mean = mean(total, na.rm = T)) %>%
+  mutate(mean = round(mean, 0)) %>%
+# summarize for secondary baseline
+  group_by(Class, Biome, status) %>%
+  pivot_wider(names_from = status, values_from = mean) %>%
+  # pivot out baselines to deduce change in values based on LUC
+  filter(!(is.na(`primary baseline`) & is.na(`secondary baseline`))) %>%
+  rename(`primary_b` = `primary baseline`,
+         `secondary_b` = `secondary baseline`) %>%
+  mutate(cropland_pri = (Cropland - primary_b)/primary_b*100,
+         pasture_pri = (Pasture - primary_b)/primary_b*100,
+         plantation_pri = (`Plantation forest` - primary_b)/primary_b*100,
+         urban_pri = (Urban - primary_b)/primary_b*100,
+         cropland_sec = (Cropland - secondary_b)/secondary_b*100,
+         plantation_sec = (`Plantation forest` - secondary_b)/secondary_b*100,
+         pasture_sec = (Pasture - secondary_b)/secondary_b*100,
+         urban_sec = (Urban - secondary_b)/secondary_b*100,
+) %>%
+    mutate(across(c(cropland_pri, 
+                    pasture_pri,
+                    plantation_pri,
+                    urban_pri,
+                    cropland_sec,
+                    plantation_sec,
+                    pasture_sec,
+                    urban_sec), round, 0))
+
+
+tmp2c <- tmp2c[,c(1, 2, 9, 10, 11, 12, 13, 14, 15, 16)]
+print(tmp2c)
+# deduce percentages
+
+# BUT WE NEED SET THRESHOLD - how many species lost by 80-90%
+```
+
+first we split into primary and secondary baselines
+
+```{r}
+tmp2c_pri <- tmp2c %>%
+  select(Class:urban_pri)
+
+tmp2c_sec <- tmp2c %>%
+  select(Class, Biome, cropland_sec:urban_sec)
+```
+
+then we break those into above 80 and below 80%
+  first we pivot
+  
+```{r}
+# primary baselines
+# below 80
+tmp2c_pri_b80 <- tmp2c_pri %>%
+  pivot_longer(cols=c("cropland_pri",
+               "pasture_pri",
+               "plantation_pri",
+               "urban_pri"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct <= -80)
+
+# above 80
+tmp2c_pri_a80 <- tmp2c_pri %>%
+  pivot_longer(cols=c("cropland_pri",
+               "pasture_pri",
+               "plantation_pri",
+               "urban_pri"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct > -80) %>%
+  arrange(desc(pct))
+```
+
+```{r}
+# secondary baselines
+# below 80
+tmp2c_sec_b80 <- tmp2c_sec %>%
+  pivot_longer(cols=c("cropland_sec",
+               "pasture_sec",
+               "plantation_sec",
+               "urban_sec"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct <= -80)
+
+# above 80
+tmp2c_sec_a80 <- tmp2c_sec %>%
+  pivot_longer(cols=c("cropland_sec",
+               "pasture_sec",
+               "plantation_sec",
+               "urban_sec"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct > -80) %>%
+  arrange(desc(pct))
+```
+
+the taxonomic groups with outlier values are reasonable (plants, conifer pines in plantations, nematodes, insects and smaller organisms like archanids which often have larger populations and larger magnitude of change)
+
+
+### extracting classes
+
+```{r}
+tmp2c_pri_neg <- tmp2c_pri %>%
+  pivot_longer(cols=c("cropland_pri",
+               "pasture_pri",
+               "plantation_pri",
+               "urban_pri"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct < 0) %>%
+  arrange(pct) %>%
+  filter(!is.na(Class), Class != "Not assigned")
+
+tmp2c_sec_neg = tmp2c_sec %>%
+  pivot_longer(cols=c("cropland_sec",
+               "pasture_sec",
+               "plantation_sec",
+               "urban_sec"),
+               names_to = "conversion",
+               values_to = "pct",
+               values_drop_na = T) %>%
+  filter(!(pct == Inf),
+         pct < 0)%>%
+  arrange(pct) %>%
+  filter(!is.na(Class), Class != "Not assigned")
+```
+
+# Mean Spp Abundance
+total number of individuals of each species and dividing it by the number of species present.
+
+at site level
+
+```{r}
+tmp2 <- tmp1ab %>%
+  select(Reference, Site_number, 
+         Family, Genus, 
+         Biome, Predominant_land_use,
+         Effort_corrected_measurement) %>%
+  filter(!(Effort_corrected_measurement == 0)) %>%
+  mutate(ref_site = paste(Reference, Site_number, sep = "_"),
+         fam_genus = paste(Family, Genus, sep = "_")) %>%
+  select(-Reference, -Site_number, -Family, -Genus) %>%
+  group_by(ref_site,
+           Biome,
+           Predominant_land_use,
+           fam_genus) %>%
+  summarize(total = sum(Effort_corrected_measurement)) %>%
+  group_by(ref_site, Biome, Predominant_land_use, fam_genus) %>%
+  summarize(site_total = round(sum(total),0)) %>%
+   group_by(ref_site) %>%
+  mutate(site_total_spp = n_distinct(fam_genus)) %>%
+
+
+  group_by(ref_site, Biome, Predominant_land_use) %>%
+  summarize(site_total_ab = sum(site_total),
+             site_total_spp = first(site_total_spp))
+  
+# calculate mean species abundance
+tmp3 <- tmp2 %>%
+  select(ref_site,
+         site_total_ab,
+         site_total_spp) %>%
+  ungroup() %>%
+  select(-Biome) %>%
+  mutate(msa = round(site_total_ab/site_total_spp,0)) %>%
+  select(ref_site, msa)
+
+msa <- tmp3
+```
+
+# data integration
+
+```{r}
+pd_result <- pd_result %>%
+  rownames_to_column(var="ref_site") %>%
+  select(ref_site, PD)
+
+hqi_score <- hqi_score %>%
+  mutate(ref_site = study_site) %>%
+  select(ref_site, hq_score)
+
+hqi_score <- hqi_score %>%
+  group_by(ref_site) %>%
+  slice_min(hq_score)
+
+combined_scores <- hanpp_score %>%
+  inner_join(., msa) %>%
+  inner_join(., hqi_score) %>%
+  inner_join(., shann_rich) %>%
+  inner_join(., pd_result) %>%
+  inner_join(., tmp2e)
+
+combined_scores <- combined_scores %>%
+  rename(hanpp = app_prod,
+         spp_rich = shannon_rich,
+         phylo_div = PD)
+
+write.csv(combined_scores, "combined_scoresv1.csv")
+```
+
+# addition of coordinates
+```{r}
+tmp3 <- tmp1 %>%
+  select(Reference, Site_number, Longitude, Latitude) %>%
+  distinct() %>%
+  mutate(ref_site = paste(Reference, Site_number, sep="_")) %>%
+  select(ref_site, Latitude, Longitude)
+
+combined_scores <- combined_scores %>%
+  left_join(., tmp3)
+
+write.csv(combined_scores, "combined_scoresv1.csv")
+```
+
+
+## filtering out sites with multiple coordinates
+```{r}
+coord <- tmp1 %>%
+  select(Latitude, Longitude, Reference, Site_number) %>%
+  distinct()
+
+coord2 <- tmp1 %>%
+  select(Latitude, Longitude, Reference, Site_number) %>%
+  mutate(ref_site = paste(Reference, Site_number, sep="_")) %>%
+  select(ref_site, Latitude, Longitude) %>%
+  distinct() %>%
+  group_by(ref_site) %>%
+  summarize(n = n())
+
+table((coord2$n))/26699*100
+```
+if we only retain the sites with only 1 pair of coordinates, we will still have 91% of sites
+
+so lets filter out the sites with more than 1 set of spatial coordinates
+```{r}
+coord3 = coord2 %>%
+  filter( n == 1)
+
+combined_scores2 <- combined_scores %>%
+  filter(ref_site %in% coord3$ref_site)
+
+rm(coord, coord2, coord3)
+```
+
+
+```{r}
+write.csv(combined_scores2, "combined_scoresv2.csv")
+```
+
+adding in pdf
+```{r}
+combined_scores3 <- combined_scores2
+combined_scores3$ref_site <- trimws(tolower(combined_scores3$ref_site))
+tmp2e <- tmp2e %>%
+  select(ref_site, mean_avg)
+combined_scores3 <- combined_scores3 %>%
+  #left_join(., tmp2e) %>%
+  filter(hanpp != "TBC") %>% # remove undecided hanpp sites
+  filter(!is.nan(spp_rich)) # removing residue sites with NaN spp richness
+
+# combined_scores3$mean_avg = ifelse(is.na(combined_scores3$mean_avg), 0, combined_scores3$mean_avg) # some pdf has na, replace with 0
+```
+
+```{r}
+tmp2e_non0 <- tmp2e %>%
+  filter(mean_avg != 0)
+```
+
+```{r}
+table(tmp2e_non0$ref_site %in% combined_scores$ref_site)
+```
+So it seems non of the sites that recorded changes in abundance of organisms across a change in land use are in the combined_scores
+
+and attempts to inner_join led revealed that both df ref_sites are mutually_exclusive. we are talking about only 6 studies or so that actually did the measurement across different luc
+
+# Modeling using multiple linear reg
+
+```{r}
+str(combined_scores3)
+```
+
+```{r}
+combined_scores4 = combined_scores3 %>%
+  mutate(hanpp = as.factor(hanpp))
+
+combined_scores4 <- cbind(combined_scores4, model.matrix(~ hanpp - 1, data = combined_scores4)) # convert matrix with onehot encoding for hanpp scores (high or low)
+
+combined_scores4$log_msa = log(combined_scores4$msa + 1) # applying log transformation to deal with outliers of msa
+
+## scaling
+
+### defining variables
+x- xmin/(xmax-xmin)
+spp_rich_min = min(combined_scores4$spp_rich, na.rm = T)
+spp_rich_max = max(combined_scores4$spp_rich, na.rm = T)
+phylo_div_min = min(combined_scores4$phylo_div, na.rm = T)
+phylo_div_max = max(combined_scores4$phylo_div, na.rm = T)
+log_msa_min = min(combined_scores4$log_msa, na.rm = T)
+log_msa_max = max(combined_scores4$log_msa, na.rm = T)
+
+combined_scores4 =  combined_scores4 %>%
+  mutate(
+    spp_rich_scaled = (spp_rich - spp_rich_min)/(spp_rich_max - spp_rich_min),
+    phylo_div_scaled = (phylo_div - phylo_div_min)/(phylo_div_max - phylo_div_min),
+    log_msa_scaled = (log_msa - log_msa_min)/(log_msa_max - log_msa_min),
+    ov_score = hq_score + spp_rich_scaled + phylo_div_scaled + log_msa_scaled + hanpphigh*0.2 + hanpplow*0.8) 
+
+# let's proceed to put in a multiple regression model
+
+model <- lm(ov_score ~ hq_score + spp_rich_scaled + phylo_div_scaled + 
+               + log_msa_scaled + hanpplow + hanpphigh, 
+            data = combined_scores4)
+
+# View the model summary
+summary(model)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
