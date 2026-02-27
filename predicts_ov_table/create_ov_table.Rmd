@@ -37,7 +37,7 @@ library(ggplot2)
 
 ### load data
 ```{r}
-# setwd("C:/Users/user/OneDrive - Massachusetts Institute of Technology/Research/cs3-biodiversity/predicts_master_table")
+# setwd("predicts_ov_table")
 input_csv <- "predicts_filtered_2000_2024.csv"
 
 raw_data <- read_csv(input_csv)
@@ -640,8 +640,11 @@ library(dplyr)
 sf_use_s2(FALSE) # avoid doing polygon validity checks
 
 # Read AEZ polygons
-file_location <- ("C:/Users/user/OneDrive - Massachusetts Institute of Technology/Research/spatial_datasets/AEZs/AEZ_shp_file.shp")
-aez <- read_sf(file_location) %>%
+aez_path <- file.path("..", "AEZ_dataset", "AEZ_shp_file.shp")
+if (!file.exists(aez_path)) {
+  stop("AEZ shapefile not found at: ", normalizePath(aez_path, mustWork = FALSE))
+}
+aez <- read_sf(aez_path) %>%
   st_make_valid() %>%
   select(Id, AEZ)
 

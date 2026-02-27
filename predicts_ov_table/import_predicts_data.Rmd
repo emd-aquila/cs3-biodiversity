@@ -60,7 +60,9 @@ We must work with the **full** PREDICTS database rather than the site‑level su
 
 ```{r download}
 # Cache databse here to access between sessions if needed
-cache_file <- "C:/Users/user/OneDrive - MIT/Research/cs3-biodiversity/predicts_table_chat/data/predicts_full.rds"
+cache_dir <- file.path("data")
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+cache_file <- file.path(cache_dir, "predicts_full.rds")
 
 # Load the full database
 predicts_raw <- LoadPredictsData(cache_file, extract = extract_years)
