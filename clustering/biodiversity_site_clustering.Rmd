@@ -1411,8 +1411,11 @@ library(ggplot2)
 library(dplyr)
 
 # Read AEZ polygons
-file_location <- ("C:/Users/user/OneDrive - Massachusetts Institute of Technology/Research/spatial_datasets/AEZs/AEZ_shp_file.shp")
-aez <- read_sf(file_location) %>%
+aez_path <- file.path("..", "AEZ_dataset", "AEZ_shp_file.shp")
+if (!file.exists(aez_path)) {
+  stop("AEZ shapefile not found at: ", normalizePath(aez_path, mustWork = FALSE))
+}
+aez <- read_sf(aez_path) %>%
   st_make_valid() %>%
   select(Id, AEZ)
 
