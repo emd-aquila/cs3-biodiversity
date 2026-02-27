@@ -1328,9 +1328,6 @@ bundle_tbl <- map_dfr(bundle_paths, function(p) {
 }) |>
   arrange(method, radius_km)
 
-# optional sanity check: show what was found
-print(bundle_tbl |> count(method, radius_km))
-
 ## ----------------------------
 ## Decision table (clean cols)
 ## ----------------------------
@@ -1373,39 +1370,80 @@ write_csv(pam_tbl,    "cluster_method_comp_PAM.csv")
 write_csv(clara_tbl,  "cluster_method_comp_CLARA.csv")
 write_csv(greedy_tbl, "cluster_method_comp_GREEDY.csv")
 
-```
+## ----------------------------
+## Clusters per AEZ per method/radius (incl. zero-cluster AEZs)
+## ----------------------------
 
-# Creating plots for each clustering method using above functions
-```{r}
-decision_tbl <- bundle_tbl |>
-  arrange(method, radius_km) |>
-  mutate(
-    pct_sites_clustered = round(pct_sites_clustered, 1),
-    median_cluster_size = round(median_cluster_size, 1),
-    p90_cluster_size = round(p90_cluster_size, 1),
-    max_radius_observed_km = round(max_radius_observed_km, 2)
-  ) |>
-  select(
-    method,
-    radius_km,
-    pct_sites_clustered,
-    n_clusters,
-    n_aez_with_clusters,
-    effective_cluster_years,
-    median_cluster_size,
-    p90_cluster_size,
-    max_radius_observed_km
-  )
 
-decision_tbl
+# get the full AEZ roster from the first bundle (or from your raw sites table if you prefer)
+get_all_aez <- function(bundle) {
+  sort(unique(bundle$sites_tbl_clustered$AEZ))
+}
 
-readr::write_csv(decision_tbl, "cluster_method_comparison_table.csv")
+clusters_by_aez_one_bundle <- function(bundle, method, radius_km) {
+  sites <- bundle$sites_tbl_clustered
+  stopifnot(!is.null(sites))
+  stopifnot(all(c("AEZ","cluster_within_aez") %in% names(sites)))
 
+  all_aez <- sort(unique(sites$AEZ))
+
+  # count unique clusters within each AEZ (exclude 0/noise)
+  counts <- sites |>
+    filter(cluster_within_aez > 0L) |>
+    mutate(cluster_key = paste(AEZ, cluster_within_aez, sep = "::")) |>
+    group_by(AEZ) |>
+    summarise(n_clusters = n_distinct(cluster_key), .groups = "drop")
+
+  # ensure AEZs with 0 clusters appear
+  tibble(AEZ = all_aez) |>
+    left_join(counts, by = "AEZ") |>
+    mutate(
+      n_clusters = tidyr::replace_na(n_clusters, 0L),
+      method = method,
+      radius_km = radius_km
+    ) |>
+    select(method, radius_km, AEZ, n_clusters)
+}
+
+clusters_by_aez_tbl <- map_dfr(bundle_paths, function(p) {
+  rad <- parse_radius_km(p)
+  meth <- parse_method(p)
+
+  if (is.na(rad) || !(rad %in% target_radii)) return(NULL)
+
+  b <- readRDS(p)
+  clusters_by_aez_one_bundle(b, meth, rad)
+}) |>
+  arrange(method, radius_km, AEZ)
+
+# Wide view: AEZ rows, columns = method_radius
+clusters_by_aez_wide <- clusters_by_aez_tbl |>
+  mutate(method_radius = paste0(method, "_", radius_km, "km")) |>
+  select(AEZ, method_radius, n_clusters) |>
+  tidyr::pivot_wider(names_from = method_radius, values_from = n_clusters)
+
+clusters_by_aez_tbl
+clusters_by_aez_wide
+
+# Optional: flag AEZ-method-radius combos with zero clusters
+zero_cluster_flags <- clusters_by_aez_tbl |>
+  filter(n_clusters == 0L)
+
+zero_cluster_flags
+
+# write outputs
+write_csv(clusters_by_aez_tbl,  "clusters_by_AEZ_long.csv")
+write_csv(clusters_by_aez_wide, "clusters_by_AEZ_wide.csv")
+write_csv(zero_cluster_flags,   "clusters_by_AEZ_zero_flags.csv")
 
 ```
 
 # Map to visualize clustering
 ```{r}
+# NEED TO UPDATE THIS SECTION
+
+# amend - map to visualize the clusters with OV, colored - minmax to transform it from logged to unlogged - to see if there is Ov variance over time - do by AEZ; this is the best way to differentiate between the clustering approaches
+
 library(sf)
 library(ggplot2)
 library(dplyr)
@@ -1456,15 +1494,4 @@ ggplot(pts) +
   theme(legend.position = "none") +
   labs(title = paste0("Clusters in AEZ ", aez_pick, " (unique sites)"))
 
-# amend - map to visualize the clusters with OV, colored - minmax to transform it from logged to unlogged - to see if there is Ov variance over time - do by AEZ; this is the best way to differentiate between the clustering approaches - send over email
-
-# which of the AEZs missing? table of how many clusters per AEZ? is it important?
-
-# deforestation & cluster spatial match; how far beyond? do a sensitivity analysis; then run the regression/correlation
-
-# different deforestation drivers may have differential effects; keep simple for now
-
-# reach out to Kevin on ncdf file troubles, Etienne also has scripts for reading them
-
-# send scripts directly and upload to Github as well w/o the big data files; send draft of outline 
 ```
