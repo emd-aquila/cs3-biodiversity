@@ -1,0 +1,65 @@
+---
+title: "BioTIME_filter"
+author: "Eli Duggan"
+date: "2025-09-12"
+output: html_document
+---
+
+# This script is meant to be run first. It filters out BioTIME data that 
+# is non-terrestrial or earlier than 2010.
+
+# Load packages and data
+```{r}
+library(dplyr)
+
+# Load raw data and metadata
+raw <- readRDS("data/biotime_v2_rawdata_2025.rds")
+meta <- read.csv("data/biotime_v2_metadata_2025.csv")
+```
+
+# Add realm information to raw data
+```{r}
+raw_with_realm <- raw %>%
+  left_join(meta %>% select(STUDY_ID, REALM), by = "STUDY_ID")
+
+# check it was added
+colnames(raw_with_realm)
+```
+
+# Filter out non-terrestrial data and push terrestrial dataset
+```{r}
+raw_terrestrial <- raw_with_realm %>%
+  filter(REALM == "Terrestrial")
+
+saveRDS(raw_terrestrial, "data/biotime_v2_terrestrial_2025")
+```
+
+# Filter by year and push post-2010 and post-2014 datasets
+```{r}
+raw_terrestrial <- raw_terrestrial %>%
+  mutate(YEAR = suppressWarnings(as.integer(as.character(YEAR)))) %>%
+  filter(!is.na(YEAR))
+
+raw_terrestrial_2010 <- raw_terrestrial %>% filter(YEAR >= 2010)
+raw_terrestrial_2014 <- raw_terrestrial %>% filter(YEAR >= 2014)
+
+# save RDS versions
+saveRDS(raw_terrestrial_2010, "data/biotime_v2_terrestrial_post2010_2025.rds")
+saveRDS(raw_terrestrial_2014, "data/biotime_v2_terrestrial_post2014_2025.rds")
+
+# Create counts
+counts <- tibble(
+  period      = c("All terrestrial", "Post-2010", "Post-2014"),
+  n_records   = c(
+    nrow(raw_terrestrial),
+    nrow(filter(raw_terrestrial, YEAR >= 2010)),
+    nrow(filter(raw_terrestrial, YEAR >= 2014))
+  ),
+  n_studies   = c(
+    n_distinct(raw_terrestrial$STUDY_ID),
+    n_distinct(filter(raw_terrestrial, YEAR >= 2010)$STUDY_ID),
+    n_distinct(filter(raw_terrestrial, YEAR >= 2014)$STUDY_ID)
+  )
+)
+print(counts)
+```

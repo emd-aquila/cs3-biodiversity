@@ -3,17 +3,27 @@
 .Rhistory
 .RData
 .Ruserdata
+.RDataTmp
 
 # Output files
 *.csv
 *.tsv
 *.json
-.ipynb_checkpoints/
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Working files
-canopy/
-biotime_pipeline/data
+**/data/
+**/name_files/
+**/old/
+**/checkpoints
+
+# Allow clustering outputs
+!clustering/outputs/*.csv
+!clustering/outputs/*.rds
+
+# allow some OV tables
+!predicts_ov_table/biodiversity_sites_AEZ_tag.csv
+!predicts_ov_table/pd_result.csv

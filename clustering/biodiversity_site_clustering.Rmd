@@ -1,0 +1,1470 @@
+---
+title: "biodiversity_site_clustering"
+author: "Eli Duggan"
+date: "2026-02-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+```
+
+## Load libraries
+```{r}
+library(sf)
+library(dplyr)
+library(cluster)
+library(tidyverse)
+library(purrr)
+library(furrr)
+library(progressr)
+library(future)
+library(ggplot2)
+```
+
+## Read biodiversity data and prepare for clustering ---------------------------------------------------------------------
+```{r}
+# Read site observations and standardize coordinates and year
+model_df_tagged <- read_csv("../predicts_ov_table/biodiversity_sites_AEZ_tag.csv") %>% 
+  mutate(
+    lat_r = round(Latitude, 4),
+    lon_r = round(Longitude, 4),
+    year = as.integer(substr(Sample_midpoint, 1, 4))
+  )
+
+# bar chart - number of years covered
+#   - see pretty decent year coverage, actually
+ggplot(model_df_tagged, aes(x = year)) +
+  geom_bar() +
+  labs(x = "Year", y = "Number of site-year locations", title = "Model_df_tagged")
+
+# find unique site locations to reduce clustering burden
+#   - keeps one record per AEZ, per rounded location
+unique_sites <- model_df_tagged %>%
+  distinct(AEZ, lat_r, lon_r, .keep_all = TRUE) %>% 
+  arrange(AEZ)
+
+# convert to sf points in geographic coordinates (WGS84, EPSG 4326); project onto meter-based CRS (6933 for WEC); pull projected coordinates into plain columns
+unique_sf <- unique_sites %>%
+  st_as_sf(coords = c("lon_r", "lat_r"), crs = 4326, remove = FALSE, na.fail = FALSE)
+
+sites_m <- st_transform(unique_sf, 6933)
+
+xy <- st_coordinates(sites_m)
+
+sites_tbl <- sites_m %>%
+  st_drop_geometry() %>%
+  mutate(
+    AEZ = as.character(AEZ),
+    x = xy[,1],
+    y = xy[,2])
+
+# check: dropping geometry doesn't impact row count
+stopifnot(nrow(sites_tbl) == nrow(unique_sites))
+
+# compute the year coverage per site, join into sites_tbl, pare down to needed columns 
+site_years <- model_df_tagged %>% 
+  group_by(AEZ, lat_r, lon_r) %>% 
+  summarize(
+    n_years = n_distinct(year),
+    years_single = if_else(n_years == 1L, first(year), NA_integer_),
+    .groups = "drop"
+  )
+
+sites_tbl <- sites_tbl %>%
+  left_join(site_years, by = c("AEZ","lat_r","lon_r")) %>% 
+  select(AEZ, lat_r, lon_r, x, y, n_years, years_single)
+
+# visualize year coverage
+ggplot(sites_tbl, aes(x = factor(n_years))) +
+  geom_bar() +
+  labs(
+    x = "Years of data", 
+    y = "Number of locations", 
+    title = "Years of data at each location"
+  )
+table(sites_tbl$n_years)
+```
+
+## Clustering engines
+```{r}
+# run the greedy cover
+engine_greedy_cover <- function(df, radius_m = 12500) {
+  stopifnot(all(c("x","y") %in% names(df)))
+  n <- nrow(df)
+  x <- df$x; y <- df$y
+
+  cluster <- integer(n)
+  dist_to_medoid <- rep(NA_real_, n)
+
+  uncovered <- rep(TRUE, n)
+  k <- 0L
+
+  for (i in seq_len(n)) {
+    if (!uncovered[i]) next
+    k <- k + 1L
+
+    # ball around i
+    d <- dist2(x, y, x[i], y[i])
+    members <- which(uncovered & d <= radius_m)
+
+    # pick medoid inside members, then re-ball around medoid
+    med <- choose_medoid(x, y, members)
+    d2 <- dist2(x, y, x[med], y[med])
+    members2 <- which(uncovered & d2 <= radius_m)
+
+    cluster[members2] <- k
+    dist_to_medoid[members2] <- d2[members2]
+    uncovered[members2] <- FALSE
+  }
+
+  list(
+    cluster = cluster,
+    dist_to_medoid = dist_to_medoid,
+    k = if (k > 0) k else 0L,
+    max_cluster_radius = if (k > 0) max(dist_to_medoid, na.rm = TRUE) else 0,
+    method = "greedy_cover",
+    params = list(radius_m = radius_m)
+  )
+}
+
+# Run PAM with max radius constraint
+engine_pam_radius <- function(df, radius_m = 12500, k_start = 2L, k_max = 200L) {
+  stopifnot(all(c("x","y") %in% names(df)))
+  n <- nrow(df)
+  x <- df$x; y <- df$y
+
+  if (n <= 1) {
+    return(list(
+      cluster = if (n == 1) 1L else integer(0),
+      dist_to_medoid = if (n == 1) 0 else numeric(0),
+      k = if (n == 1) 1L else 0L,
+      max_cluster_radius = 0,
+      method = "pam_radius",
+      params = list(radius_m = radius_m, k_start = k_start, k_max = k_max)
+    ))
+  }
+
+  # full distance matrix (expensive)
+  D <- as.matrix(stats::dist(cbind(x, y), method = "euclidean"))
+
+  best <- NULL
+  for (k in seq(from = k_start, to = min(k_max, n))) {
+    pam_res <- cluster::pam(D, k = k, diss = TRUE)
+
+    cl <- as.integer(pam_res$clustering)
+    medoid_idx <- as.integer(pam_res$id.med)
+
+    dist_to_medoid <- rep(NA_real_, n)
+    max_rad <- 0
+    for (j in seq_len(k)) {
+      idx <- which(cl == j)
+      med <- medoid_idx[j]
+      d <- D[idx, med]
+      dist_to_medoid[idx] <- d
+      max_rad <- max(max_rad, max(d))
+    }
+
+    best <- list(
+      cluster = cl,
+      dist_to_medoid = dist_to_medoid,
+      k = k,
+      max_cluster_radius = max_rad,
+      method = "pam_radius",
+      params = list(radius_m = radius_m, k_start = k_start, k_max = k_max)
+    )
+
+    if (max_rad <= radius_m) break
+  }
+
+  best
+}
+
+# run CLARA, increasing k until radius constraint is passed
+engine_clara <- function(df,
+                               radius_m = 12500,
+                               k_start = 2L,
+                               k_max = 500L,
+                               samples = 5L,
+                               sampsize = NULL,
+                               seed = 1L) {
+  stopifnot(all(c("x","y") %in% names(df)))
+  n <- nrow(df)
+  X <- as.matrix(df[, c("x","y")])
+
+  if (n <= 1) {
+    return(list(
+      cluster = if (n == 1) 1L else integer(0),
+      dist_to_medoid = if (n == 1) 0 else numeric(0),
+      k = if (n == 1) 1L else 0L,
+      max_cluster_radius = 0,
+      method = "clara_radius",
+      params = list(radius_m = radius_m, k_start = k_start, k_max = k_max,
+                    samples = samples, sampsize = sampsize, seed = seed)
+    ))
+  }
+
+  if (is.null(sampsize)) {
+    # cluster::clara default is min(n, 40 + 2k) historically; we choose something stable
+    sampsize <- min(n, max(40L, 10L * k_start))
+  }
+
+  best <- NULL
+
+  for (k in seq(from = k_start, to = min(k_max, n))) {
+    set.seed(seed)  # deterministic given seed
+    clara_res <- cluster::clara(X, k = k, samples = samples, sampsize = sampsize)
+
+    # clara_res$medoids is a k x 2 matrix of medoid coordinates
+    med_xy <- as.matrix(clara_res$medoids)
+
+    # Assign all points to nearest medoid + distance (pure geometric)
+    assigned <- assign_to_medoids(X[,1], X[,2], med_xy)
+    cl <- assigned$cluster
+    d  <- assigned$dist
+
+    max_rad <- max(d)
+    best <- list(
+      cluster = as.integer(cl),
+      dist_to_medoid = as.numeric(d),
+      k = k,
+      max_cluster_radius = max_rad,
+      method = "clara_radius",
+      params = list(radius_m = radius_m, k_start = k_start, k_max = k_max,
+                    samples = samples, sampsize = sampsize, seed = seed)
+    )
+
+    if (max_rad <= radius_m) break
+
+    # optionally increase sampsize as k grows
+    sampsize <- min(n, max(sampsize, 10L * k))
+  }
+
+  best
+}
+```
+
+# engine helpers
+```{r}
+# Euclidean distance in meters between points
+dist2 <- function(x1, y1, x2, y2) sqrt((x1 - x2)^2 + (y1 - y2)^2)
+
+# Given a set of indices, choose a medoid by minimizing sum of distances (L1-ish)
+choose_medoid <- function(x, y, idx) {
+  if (length(idx) == 1) return(idx[1])
+  xx <- x[idx]; yy <- y[idx]
+  dx <- outer(xx, xx, "-")
+  dy <- outer(yy, yy, "-")
+  D  <- sqrt(dx^2 + dy^2)
+  idx[which.min(rowSums(D))]
+}
+
+# For a set of medoid coordinates (k x 2), compute nearest medoid assignment + dist
+assign_to_medoids <- function(x, y, medoids_xy) {
+  k <- nrow(medoids_xy)
+  if (k == 1) {
+    d <- dist2(x, y, medoids_xy[1,1], medoids_xy[1,2])
+    return(list(cluster = rep(1L, length(x)), dist = d))
+  }
+  # distance to each medoid (n x k); OK for k ~ tens/hundreds
+  D <- sapply(seq_len(k), function(j) dist2(x, y, medoids_xy[j,1], medoids_xy[j,2]))
+  cl <- max.col(-D)              # argmin
+  d  <- D[cbind(seq_along(x), cl)]
+  list(cluster = as.integer(cl), dist = as.numeric(d))
+}
+
+# Standardize engine output to a consistent structure.
+# - Fills missing fields with defaults
+# - Validates lengths/types
+# - Coerces cluster to integer and normalizes NAs -> 0 (unassigned)
+standardize_engine_output <- function(res, n, method = NA_character_, params = list()) {
+  if (is.null(res) || !is.list(res)) {
+    stop("Engine must return a list.")
+  }
+  if (is.null(res$cluster)) {
+    stop("Engine output is missing `$cluster`.")
+  }
+  if (length(res$cluster) != n) {
+    stop("Engine `$cluster` length (", length(res$cluster), ") != n (", n, ").")
+  }
+
+  # cluster: integer vector, with 0 reserved for unassigned
+  cluster <- res$cluster
+  if (is.factor(cluster)) cluster <- as.character(cluster)
+  cluster <- suppressWarnings(as.integer(cluster))
+  cluster[is.na(cluster)] <- 0L
+  if (any(cluster < 0L)) stop("Engine `$cluster` must be >= 0 (0 = unassigned).")
+
+  # dist_to_medoid: numeric length n or all NA
+  dist_to_medoid <- res$dist_to_medoid
+  if (is.null(dist_to_medoid)) {
+    dist_to_medoid <- rep(NA_real_, n)
+  } else {
+    if (length(dist_to_medoid) != n) {
+      stop("Engine `$dist_to_medoid` length (", length(dist_to_medoid), ") != n (", n, ").")
+    }
+    dist_to_medoid <- suppressWarnings(as.numeric(dist_to_medoid))
+  }
+
+  # k: integer scalar or NA
+  k <- res$k
+  if (is.null(k)) {
+    k <- NA_integer_
+  } else {
+    if (length(k) != 1L) stop("Engine `$k` must be a scalar.")
+    k <- suppressWarnings(as.integer(k))
+  }
+
+  # max_cluster_radius: numeric scalar or NA
+  max_cluster_radius <- res$max_cluster_radius
+  if (is.null(max_cluster_radius)) {
+    max_cluster_radius <- NA_real_
+  } else {
+    if (length(max_cluster_radius) != 1L) stop("Engine `$max_cluster_radius` must be a scalar.")
+    max_cluster_radius <- suppressWarnings(as.numeric(max_cluster_radius))
+  }
+
+  # method: string
+  out_method <- res$method
+  if (is.null(out_method) || is.na(out_method) || !nzchar(out_method)) {
+    out_method <- method
+  }
+  if (is.null(out_method) || is.na(out_method) || !nzchar(out_method)) {
+    out_method <- "unknown_engine"
+  }
+
+  # params: prefer engine's own params if supplied; else use provided
+  out_params <- res$params
+  if (is.null(out_params) || !is.list(out_params)) out_params <- params
+
+  # If k missing, infer from cluster labels (excluding 0)
+  if (is.na(k)) {
+    k <- length(setdiff(unique(cluster), 0L))
+  }
+
+  # If max_cluster_radius missing but dist_to_medoid exists, infer
+  if (is.na(max_cluster_radius) && any(!is.na(dist_to_medoid))) {
+    max_cluster_radius <- suppressWarnings(max(dist_to_medoid, na.rm = TRUE))
+    if (!is.finite(max_cluster_radius)) max_cluster_radius <- NA_real_
+  }
+
+  list(
+    cluster = cluster,
+    dist_to_medoid = dist_to_medoid,
+    k = k,
+    max_cluster_radius = max_cluster_radius,
+    method = out_method,
+    params = out_params
+  )
+}
+
+evaluate_radius_pre_post <- function(sites_tbl,
+                                     radius_m,
+                                     engine_fun,
+                                     method_name = "method",
+                                     engine_params = list(),
+                                     radius_param = "radius_m",
+                                     year_single_col = "years_single") {
+  stopifnot(all(c("AEZ","x","y","n_years") %in% names(sites_tbl)))
+  stopifnot(year_single_col %in% names(sites_tbl))
+
+  # ---- run engine (inject radius into params) ----
+  params <- engine_params
+  params[[radius_param]] <- radius_m
+
+  raw <- do.call(engine_fun, c(list(df = sites_tbl), params))
+  std <- standardize_engine_output(raw, n = nrow(sites_tbl), method = method_name, params = params)
+
+  tmp <- sites_tbl
+  tmp$cluster_within_aez <- std$cluster
+  tmp$dist_to_medoid     <- std$dist_to_medoid
+
+  # Helper: cluster-level table with size + estimated distinct years
+  cluster_years_summary <- function(df_sites) {
+    df_sites |>
+      dplyr::filter(cluster_within_aez > 0L) |>
+      dplyr::group_by(AEZ, cluster_within_aez) |>
+      dplyr::summarise(
+        n_sites = dplyr::n(),
+        has_multi_year_site = any(n_years > 1, na.rm = TRUE),
+        distinct_single_years = dplyr::n_distinct(df_sites[[year_single_col]][n_years == 1], na.rm = TRUE),
+        est_distinct_years =
+          ifelse(has_multi_year_site,
+                 pmax(2, distinct_single_years),
+                 distinct_single_years),
+        max_dist_to_medoid = {
+          m <- suppressWarnings(max(dist_to_medoid, na.rm = TRUE))
+          if (is.finite(m)) m else NA_real_
+        },
+        .groups = "drop"
+      )
+  }
+
+  pct_sites_in_2plus <- function(df_sites, cl_tbl) {
+    if (nrow(cl_tbl) == 0) return(0)
+    df_sites |>
+      dplyr::left_join(
+        cl_tbl |>
+          dplyr::mutate(cluster_2plus = est_distinct_years >= 2L) |>
+          dplyr::select(AEZ, cluster_within_aez, cluster_2plus),
+        by = c("AEZ","cluster_within_aez")
+      ) |>
+      dplyr::mutate(cluster_2plus = dplyr::coalesce(cluster_2plus, FALSE)) |>
+      dplyr::summarise(pct = 100 * mean(cluster_2plus)) |>
+      dplyr::pull(pct)
+  }
+
+  stage_metrics <- function(df_sites, stage_label) {
+    cl <- cluster_years_summary(df_sites)
+
+    tibble::tibble(
+      method = method_name,
+      radius_km = radius_m / 1000,
+      stage = stage_label,
+
+      pct_clustered = 100 * mean(df_sites$cluster_within_aez > 0L),
+      n_clusters = nrow(cl),
+      n_aez_with_clusters = dplyr::n_distinct(df_sites$AEZ[df_sites$cluster_within_aez > 0L]),
+
+      median_years_per_cluster = if (nrow(cl) == 0) NA_real_ else median(cl$est_distinct_years),
+      pct_clusters_2plus_years = if (nrow(cl) == 0) NA_real_ else 100 * mean(cl$est_distinct_years >= 2L),
+
+      pct_sites_in_2plus_year_clusters = pct_sites_in_2plus(df_sites, cl),
+
+      median_cluster_size = if (nrow(cl) == 0) NA_real_ else median(cl$n_sites),
+      max_radius_observed = if (nrow(cl) == 0) NA_real_ else max(cl$max_dist_to_medoid, na.rm = TRUE),
+
+      effective_cluster_years = if (nrow(cl) == 0) NA_real_ else sum(cl$est_distinct_years, na.rm = TRUE)
+    )
+  }
+
+  pre_row  <- stage_metrics(tmp, "pre_screen")
+  tmp_post <- enforce_year_rule(tmp)
+  post_row <- stage_metrics(tmp_post, "post_screen")
+
+  dplyr::bind_rows(pre_row, post_row)
+}
+```
+
+# AEZ wrappers
+```{r}
+# Create a simple logger closure that writes timestamped lines to a file.
+# Usage:
+#   logf <- make_logger("path/to/progress.log")
+#   logf("INFO", "Starting AEZ ...")
+make_logger <- function(log_path) {
+  force(log_path)
+  dir.create(dirname(log_path), showWarnings = FALSE, recursive = TRUE)
+  function(level = "INFO", msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    line <- sprintf("%s [%s] %s\n", ts, level, msg)
+    cat(line, file = log_path, append = TRUE)
+    invisible(NULL)
+  }
+}
+
+# Build a stable checkpoint filepath for a given AEZ + method tag.
+checkpoint_path <- function(checkpoint_dir, aez, method_tag) {
+  file.path(checkpoint_dir, sprintf("aez=%s__method=%s.rds", as.character(aez), method_tag))
+}
+
+# Summarize cluster-level metadata from a sites table (unique-site level).
+# Assumes sites_tbl has: AEZ, cluster_within_aez, dist_to_medoid (optional), x,y
+summarize_clusters <- function(sites_tbl, method_tag) {
+  stopifnot(all(c("AEZ", "cluster_within_aez") %in% names(sites_tbl)))
+
+  has_dist <- "dist_to_medoid" %in% names(sites_tbl)
+
+  clusters <- sites_tbl |>
+    dplyr::filter(cluster_within_aez > 0L) |>
+    dplyr::group_by(AEZ, cluster_within_aez) |>
+    dplyr::summarise(
+      n_sites = dplyr::n(),
+      max_dist_to_medoid = if (has_dist) {
+        m <- suppressWarnings(max(dist_to_medoid, na.rm = TRUE))
+        if (is.finite(m)) m else NA_real_
+      } else {
+        NA_real_
+      },
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      method = method_tag,
+      cluster_id = paste0(AEZ, "_", method_tag, "_", cluster_within_aez)
+    )
+
+  clusters
+}
+
+
+
+# Run one AEZ through an engine, returning standardized sites-level output + engine meta.
+# This is the "unit of checkpointing".
+cluster_one_aez <- function(df_aez,
+                            engine_fun,
+                            method_tag,
+                            engine_params = list(),
+                            min_n = 2L,
+                            switch_n_threshold = NULL,
+                            fallback_engine_fun = NULL,
+                            fallback_params = list(),
+                            logf = NULL) {
+
+  stopifnot(is.data.frame(df_aez))
+  n <- nrow(df_aez)
+
+  if (!all(c("x","y") %in% names(df_aez))) {
+    stop("df_aez must contain columns x and y.")
+  }
+
+  # Minimal logger (no-op by default)
+  if (is.null(logf)) logf <- function(level, msg) invisible(NULL)
+
+  if (n < min_n) {
+    df_aez$cluster_within_aez <- 0L
+    df_aez$dist_to_medoid <- NA_real_
+
+    return(list(
+      sites = df_aez,
+      engine_meta = list(
+        method_tag = method_tag,              # run-level tag (stable)
+        engine_method_used = NA_character_,
+        params_used = engine_params,
+        fallback_used = FALSE,
+        fallback_reason = NA_character_,
+        n_sites = n,
+        k = 0L,
+        max_cluster_radius = 0
+      )
+    ))
+  }
+
+  # ---- automatic fallback rule (engine selection happens here) ----
+  use_engine_fun <- engine_fun
+  use_params     <- engine_params
+  fallback_used  <- FALSE
+  fallback_reason <- NA_character_
+
+  if (!is.null(switch_n_threshold) &&
+      is.finite(switch_n_threshold) &&
+      n > switch_n_threshold &&
+      !is.null(fallback_engine_fun)) {
+
+    use_engine_fun <- fallback_engine_fun
+    use_params     <- fallback_params
+    fallback_used  <- TRUE
+    fallback_reason <- paste0("n_aez=", n, " > switch_n_threshold=", switch_n_threshold)
+
+    logf("INFO", paste0("[FALLB] switching to fallback engine for AEZ n=", n,
+                        " (", fallback_reason, ")"))
+  }
+
+  raw <- do.call(use_engine_fun, c(list(df = df_aez), use_params))
+
+  # NOTE: `method=` here is *engine name hint* only; we keep run-level method_tag stable elsewhere
+  std <- standardize_engine_output(
+    raw,
+    n = n,
+    method = method_tag,
+    params = use_params
+  )
+
+  df_aez$cluster_within_aez <- std$cluster
+  df_aez$dist_to_medoid     <- std$dist_to_medoid
+
+  list(
+    sites = df_aez,
+    engine_meta = list(
+      method_tag = method_tag,              # run-level tag (stable)
+      engine_method_used = std$method,       # actual engine label returned (e.g., "pam_radius" or "greedy_cover")
+      params_used = std$params,              # params actually used (primary or fallback)
+      fallback_used = fallback_used,
+      fallback_reason = fallback_reason,
+      n_sites = n,
+      k = std$k,
+      max_cluster_radius = std$max_cluster_radius
+    )
+  )
+}
+
+# Main wrapper: loop over AEZs with logging + per-AEZ checkpointing.
+# Returns a list: sites (bound), clusters (metadata), run_meta (params)
+cluster_within_aez <- function(sites_tbl,
+                               engine_fun,
+                               method_tag,
+                               engine_params = list(),
+                               min_n = 2L,
+                               aez_order = NULL,
+                               checkpoint_dir,
+                               log_file = "progress.log",
+                               fail_fast = TRUE,
+                               switch_n_threshold = NULL,
+                               fallback_engine_fun = NULL,
+                               fallback_params = list()) {
+
+  stopifnot(is.data.frame(sites_tbl))
+  stopifnot("AEZ" %in% names(sites_tbl))
+  dir.create(checkpoint_dir, showWarnings = FALSE, recursive = TRUE)
+
+  log_path <- file.path(checkpoint_dir, log_file)
+  logf <- make_logger(log_path)
+
+  # Stable AEZ ordering
+  if (is.null(aez_order)) {
+    aez_order <- unique(as.character(sites_tbl$AEZ))
+  }
+
+  sites_tbl <- sites_tbl |>
+    dplyr::mutate(AEZ = factor(AEZ, levels = aez_order)) |>
+    dplyr::arrange(AEZ)
+
+  aez_list <- split(sites_tbl, sites_tbl$AEZ, drop = TRUE)
+
+  out_sites <- vector("list", length(aez_list))
+  out_meta  <- vector("list", length(aez_list))
+  names(out_sites) <- names(aez_list)
+  names(out_meta)  <- names(aez_list)
+
+  for (aez in names(aez_list)) {
+    ckpt <- checkpoint_path(checkpoint_dir, aez, method_tag)
+
+    if (file.exists(ckpt)) {
+      logf("INFO", paste0("[SKIP ] ", aez, " (checkpoint exists: ", basename(ckpt), ")"))
+      obj <- readRDS(ckpt)
+      out_sites[[aez]] <- obj$sites
+      out_meta[[aez]]  <- obj$engine_meta
+      next
+    }
+
+    df_aez <- aez_list[[aez]]
+    logf("INFO", paste0("[START] ", aez, " n=", nrow(df_aez)))
+
+    obj <- tryCatch(
+      {
+        res <- cluster_one_aez(
+          df_aez = df_aez,
+          engine_fun = engine_fun,
+          method_tag = method_tag,
+          engine_params = engine_params,
+          min_n = min_n,
+          switch_n_threshold = switch_n_threshold,
+          fallback_engine_fun = fallback_engine_fun,
+          fallback_params = fallback_params,
+          logf = logf
+        )
+
+        saveRDS(res, ckpt)
+        logf("INFO", paste0("[DONE ] ", aez, " -> ", basename(ckpt),
+                            " | engine_used=", res$engine_meta$engine_method_used,
+                            if (isTRUE(res$engine_meta$fallback_used)) " (fallback)" else ""))
+
+        res
+      },
+      error = function(e) {
+        logf("ERROR", paste0("[FAIL ] ", aez, ": ", conditionMessage(e)))
+        if (fail_fast) stop(e)
+
+        df_aez$cluster_within_aez <- 0L
+        df_aez$dist_to_medoid <- NA_real_
+
+        list(
+          sites = df_aez,
+          engine_meta = list(
+            method_tag = method_tag,
+            engine_method_used = NA_character_,
+            params_used = engine_params,
+            fallback_used = FALSE,
+            fallback_reason = NA_character_,
+            n_sites = nrow(df_aez),
+            k = NA_integer_,
+            max_cluster_radius = NA_real_
+          )
+        )
+      }
+    )
+
+    out_sites[[aez]] <- obj$sites
+    out_meta[[aez]]  <- obj$engine_meta
+  }
+
+  sites_out <- dplyr::bind_rows(out_sites)
+
+  # cluster-level metadata table (computed from sites_out)
+  # NOTE: method_tag is the run tag; engine_used varies per AEZ and is stored in engine_meta_by_aez
+  clusters_out <- summarize_clusters(sites_out, method_tag = method_tag)
+
+  run_meta <- list(
+    method_tag = method_tag,
+    engine_params = engine_params,
+    checkpoint_dir = checkpoint_dir,
+    log_path = log_path,
+    aez_order = aez_order,
+    switch_n_threshold = switch_n_threshold,
+    fallback_engine = if (!is.null(fallback_engine_fun)) deparse(substitute(fallback_engine_fun)) else NULL,
+    fallback_params = fallback_params
+  )
+
+  list(
+    sites = sites_out,
+    clusters = clusters_out,
+    engine_meta_by_aez = out_meta,
+    run_meta = run_meta
+  )
+}
+```
+
+# Post-processing and export functions
+```{r}
+# Year rule enforcement at unique-site level.
+# A cluster is valid if:
+#   - at least one site has n_years > 1, OR
+#   - cluster contains >= 2 distinct single-year values across its sites
+#
+# Expects sites_tbl has: AEZ, cluster_within_aez, n_years, years_single
+# where years_single is either NA (if n_years > 1) or an integer year (if n_years == 1).
+#
+# Returns a modified sites_tbl with:
+#   - year_rule_ok (logical)
+#   - cluster_within_aez set to 0 for invalid clusters
+enforce_year_rule <- function(sites_tbl) {
+  req <- c("AEZ", "cluster_within_aez", "n_years", "years_single")
+  missing <- setdiff(req, names(sites_tbl))
+  if (length(missing) > 0) stop("sites_tbl missing required columns: ", paste(missing, collapse = ", "))
+
+  # Build cluster validity flags
+  validity <- sites_tbl |>
+    dplyr::filter(cluster_within_aez > 0L) |>
+    dplyr::group_by(AEZ, cluster_within_aez) |>
+    dplyr::summarise(
+      has_multi_year_site = any(n_years > 1, na.rm = TRUE),
+      n_distinct_single_years = dplyr::n_distinct(years_single[n_years == 1], na.rm = TRUE),
+      year_rule_ok = has_multi_year_site | (n_distinct_single_years >= 2L),
+      .groups = "drop"
+    ) |>
+    dplyr::select(AEZ, cluster_within_aez, year_rule_ok)
+
+  out <- sites_tbl |>
+    dplyr::left_join(validity, by = c("AEZ","cluster_within_aez")) |>
+    dplyr::mutate(
+      year_rule_ok = dplyr::if_else(cluster_within_aez == 0L, TRUE, dplyr::coalesce(year_rule_ok, FALSE)),
+      cluster_within_aez = dplyr::if_else(year_rule_ok, cluster_within_aez, 0L)
+    )
+
+  out
+}
+
+# Attach final identifiers after all post-processing (pure).
+# Creates:
+# - cluster_id string
+# - cluster_missing flag (includes unassigned 0)
+finalize_cluster_ids <- function(sites_tbl, method_tag) {
+  stopifnot(all(c("AEZ","cluster_within_aez") %in% names(sites_tbl)))
+  sites_tbl |>
+    dplyr::mutate(
+      method = method_tag,
+      cluster_id = dplyr::if_else(
+        cluster_within_aez > 0L,
+        paste0(AEZ, "_", method_tag, "_", cluster_within_aez),
+        NA_character_
+      ),
+      cluster_missing = (cluster_within_aez == 0L)
+    )
+}
+
+
+# Join cluster labels from unique sites back onto the full time-series table (pure).
+# join_by should match your site keys (AEZ, lat_r, lon_r).
+join_clusters_back <- function(model_df_tagged,
+                               sites_tbl_clustered,
+                               join_by = c("AEZ","lat_r","lon_r")) {
+  stopifnot(is.data.frame(model_df_tagged), is.data.frame(sites_tbl_clustered))
+  stopifnot(all(join_by %in% names(model_df_tagged)))
+  stopifnot(all(join_by %in% names(sites_tbl_clustered)))
+
+  keep_cols <- c(join_by, "cluster_within_aez", "cluster_id", "method", "cluster_missing")
+  if ("dist_to_medoid" %in% names(sites_tbl_clustered)) keep_cols <- c(keep_cols, "dist_to_medoid")
+  if ("year_rule_ok" %in% names(sites_tbl_clustered))  keep_cols <- c(keep_cols, "year_rule_ok")
+
+  rhs <- sites_tbl_clustered |>
+    dplyr::select(dplyr::all_of(unique(keep_cols)))
+
+  model_df_tagged |>
+    dplyr::left_join(rhs, by = join_by) |>
+    dplyr::mutate(cluster_missing = dplyr::coalesce(cluster_missing, TRUE))
+}
+
+
+# Export bundle (I/O only).
+# Writes:
+#  - RDS bundle
+#  - CSV clustered full dataset
+#  - CSV clustered unique sites
+#  - CSV cluster metadata
+export_bundle <- function(out_prefix,
+                          model_df_clustered,
+                          sites_tbl_clustered,
+                          clusters_meta,
+                          params = list()) {
+  dir.create(dirname(out_prefix), showWarnings = FALSE, recursive = TRUE)
+
+  bundle <- list(
+    model_df_clustered = model_df_clustered,
+    sites_tbl_clustered = sites_tbl_clustered,
+    clusters_meta = clusters_meta,
+    params = params
+  )
+
+  saveRDS(bundle, paste0(out_prefix, "_bundle.rds"))
+  readr::write_csv(model_df_clustered, paste0(out_prefix, "_model_df_clustered.csv"))
+  readr::write_csv(sites_tbl_clustered, paste0(out_prefix, "_sites_tbl_clustered.csv"))
+  readr::write_csv(clusters_meta, paste0(out_prefix, "_clusters_meta.csv"))
+
+  invisible(bundle)
+}
+```
+
+## ============================================================
+## PAM within each AEZ
+## ============================================================
+```{r}
+MAX_R <- 25000 # 12500 meter radius, so maximum distance between sites is 25km
+R_KM <- MAX_R / 1000
+R_KM_STR <- formatC(R_KM, format = "f", digits = 1)
+
+
+# Order smallest AEZs first (debug-friendly and makes early checkpoints fast)
+aez_order <- sites_tbl |>
+  dplyr::count(AEZ, name = "n_sites") |>
+  dplyr::arrange(n_sites) |>
+  dplyr::pull(AEZ) |>
+  as.character()
+
+# ---- Run clustering with caching + logging (wrapper owns it) ----
+# Policy: PAM for AEZs with n <= 2000; greedy_cover fallback otherwise.
+pam_run <- cluster_within_aez(
+  sites_tbl      = sites_tbl,
+
+  # primary engine
+  engine_fun     = engine_pam_radius,
+  method_tag     = "PAMR",
+  engine_params  = list(
+    radius_m = MAX_R,
+    k_start  = 2L,
+    k_max    = 200L
+  ),
+
+  # workflow controls
+  min_n          = 2L,
+  aez_order      = aez_order,
+  checkpoint_dir = paste0("checkpoints/pam_rad_", R_KM_STR, "km"),
+  log_file       = "progress.log",
+  fail_fast      = TRUE,
+
+  # fallback controls (no method_tag change; engine_meta records actual engine used)
+  switch_n_threshold  = 1500L,
+  fallback_engine_fun = engine_greedy_cover,
+  fallback_params     = list(radius_m = MAX_R)
+)
+
+stopifnot("dist_to_medoid" %in% names(pam_run$sites))
+
+# ---- Post-processing: year rule enforcement on unique sites ----
+pam_sites_year <- pam_run$sites |>
+  enforce_year_rule()
+
+# Final IDs and flags (cluster_missing etc.)
+pam_sites_final <- pam_sites_year |>
+  finalize_cluster_ids(method_tag = "PAMR")
+
+# Cluster metadata should be recomputed AFTER year-rule changes
+pam_clusters_final <- summarize_clusters(pam_sites_final, method_tag = "PAMR")
+
+# ---- Join back to the full time-series dataset ----
+model_df_pam <- join_clusters_back(
+  model_df_tagged     = model_df_tagged,
+  sites_tbl_clustered = pam_sites_final,
+  join_by             = c("AEZ", "lat_r", "lon_r")
+)
+
+# ---- Export bundle (single call; all I/O here) ----
+pam_bundle <- export_bundle(
+  out_prefix = paste0("outputs/pam_rad_", R_KM_STR, "km"),
+  model_df_clustered  = model_df_pam,
+  sites_tbl_clustered = pam_sites_final,
+  clusters_meta       = pam_clusters_final,
+  params = list(
+    run_tag = "PAMR",
+    primary_engine = "engine_pam_radius",
+    fallback_engine = "engine_greedy_cover",
+    switch_n_threshold = 1500L,
+    radius_m = MAX_R,
+    engine_params = pam_run$run_meta$engine_params,
+    fallback_params = pam_run$run_meta$fallback_params,
+    checkpoint_dir = pam_run$run_meta$checkpoint_dir,
+    log_path = pam_run$run_meta$log_path
+  )
+)
+
+# Quick diagnostics
+summary(pam_clusters_final$max_dist_to_medoid)
+table(sapply(pam_run$engine_meta_by_aez, `[[`, "engine_method_used"), useNA = "ifany")
+```
+
+## ============================================================
+## Greedy Cover within each AEZ
+## ============================================================
+```{r}
+MAX_R <- 12500 # meters, maximum site distance is twice this
+R_KM <- MAX_R / 1000
+R_KM_STR <- formatC(R_KM, format = "f", digits = 1)
+
+# Order smallest AEZs first (debug-friendly and makes early checkpoints fast)
+aez_order <- sites_tbl |>
+  dplyr::count(AEZ, name = "n_sites") |>
+  dplyr::arrange(n_sites) |>
+  dplyr::pull(AEZ) |>
+  as.character()
+
+# ---- Run clustering with caching + logging (wrapper owns it) ----
+greedy_run <- cluster_within_aez(
+  sites_tbl      = sites_tbl,
+  engine_fun     = engine_greedy_cover,
+  method_tag     = "GRDY",
+  engine_params  = list(radius_m = MAX_R),
+
+  # workflow controls
+  min_n          = 2L,
+  aez_order      = aez_order,
+  checkpoint_dir = paste0("checkpoints/greedy_cover_rad_", R_KM_STR, "km"),
+  log_file       = "progress.log",
+  fail_fast      = TRUE
+)
+
+stopifnot("dist_to_medoid" %in% names(greedy_run$sites))
+
+# ---- Post-processing: year rule enforcement on unique sites ----
+greedy_sites_year <- greedy_run$sites |>
+  enforce_year_rule()
+
+# Final IDs and flags (cluster_missing etc.)
+greedy_sites_final <- greedy_sites_year |>
+  finalize_cluster_ids(method_tag = "GRDY")
+
+# Cluster metadata should be recomputed AFTER year-rule changes
+greedy_clusters_final <- summarize_clusters(greedy_sites_final, method_tag = "GRDY")
+
+# ---- Join back to the full time-series dataset ----
+model_df_greedy <- join_clusters_back(
+  model_df_tagged     = model_df_tagged,
+  sites_tbl_clustered = greedy_sites_final,
+  join_by             = c("AEZ", "lat_r", "lon_r")
+)
+
+# ---- Export bundle (single call; all I/O here) ----
+greedy_bundle <- export_bundle(
+  out_prefix = paste0("outputs/greedy_cover_rad_", R_KM_STR, "km"),
+  model_df_clustered  = model_df_greedy,
+  sites_tbl_clustered = greedy_sites_final,
+  clusters_meta       = greedy_clusters_final,
+  params = list(
+    run_tag = "GRDY",
+    engine = "engine_greedy_cover",
+    radius_m = MAX_R,
+    engine_params = greedy_run$run_meta$engine_params,
+    checkpoint_dir = greedy_run$run_meta$checkpoint_dir,
+    log_path = greedy_run$run_meta$log_path
+  )
+)
+
+# Quick diagnostics
+summary(greedy_clusters_final$max_dist_to_medoid)
+
+```
+
+## probing different radius options for greedy_cover
+```{r}
+radius_grid_km <- seq(8, 50, by = 1)
+radius_grid_m  <- radius_grid_km * 1000
+
+tradeoff_both <- purrr::map_dfr(
+  radius_grid_m,
+  ~evaluate_radius_pre_post(
+    sites_tbl = sites_tbl,
+    radius_m = .x,
+    engine_fun = engine_greedy_cover,
+    method_name = "GREEDY",
+    engine_params = list(),          # greedy only needs radius_m; helper injects it
+    radius_param = "radius_m",
+    year_single_col = "years_single" # change to "year_single" if that's your column
+  )
+)
+
+tradeoff_pre  <- tradeoff_both |> dplyr::filter(stage == "pre_screen")
+tradeoff_post <- tradeoff_both |> dplyr::filter(stage == "post_screen")
+
+ggplot(tradeoff_both, aes(x = radius_km, y = pct_sites_in_2plus_year_clusters, linetype = stage)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Greedy: % of sites in ≥2-year clusters (pre vs post year-screen)",
+    x = "Radius (km)",
+    y = "% of unique sites"
+  )
+
+ggplot(tradeoff_post, aes(x = radius_km, y = median_cluster_size)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Median cluster size (post-screen)",
+    x = "Radius (km)",
+    y = "Median cluster size"
+  )
+
+ggplot(tradeoff_post, aes(x = radius_km, y = n_aez_with_clusters)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "AEZs with ≥1 usable cluster",
+    x = "Radius (km)",
+    y = "Number of AEZs"
+  )
+
+ggplot(tradeoff_post, aes(x = radius_km, y = effective_cluster_years)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Total cluster-year observations (post-screen)",
+    x = "Radius (km)",
+    y = "Sum of distinct years across clusters"
+  )
+```
+
+## ============================================================
+## CLARA within each AEZ
+## - scalable medoid approximation (no full n^2 distance matrix)
+## - still enforces radius by increasing k until max(dist_to_medoid) <= MAX_R
+## ============================================================
+
+```{r}
+MAX_R <- 25000 # 12500 meter radius, so maximum distance between sites is 25km
+R_KM <- MAX_R / 1000
+R_KM_STR <- formatC(R_KM, format = "f", digits = 1)
+
+
+
+# Order smallest AEZs first (debug-friendly and makes early checkpoints fast)
+aez_order <- sites_tbl |>
+  dplyr::count(AEZ, name = "n_sites") |>
+  dplyr::arrange(n_sites) |>
+  dplyr::pull(AEZ) |>
+  as.character()
+
+# ---- Run clustering with caching + logging (wrapper owns it) ----
+clara_run <- cluster_within_aez(
+  sites_tbl      = sites_tbl,
+  engine_fun     = engine_clara,
+  method_tag     = "CLARA",
+  engine_params  = list(
+    radius_m  = MAX_R,
+    k_start   = 2L,
+    k_max     = 500L,
+    samples   = 5L,
+    sampsize  = NULL,   # let engine pick a reasonable default and grow with k
+    seed      = 1L
+  ),
+
+  # workflow controls
+  min_n          = 2L,
+  aez_order      = aez_order,
+  checkpoint_dir = paste0("checkpoints/clara_rad_", R_KM_STR, "km"),
+  log_file       = "progress.log",
+  fail_fast      = TRUE,
+
+  # optional safety net: if CLARA struggles on huge AEZs, fall back to greedy
+  # (keep or drop; recommended to keep for robustness)
+  switch_n_threshold  = 2000L,
+  fallback_engine_fun = engine_greedy_cover,
+  fallback_params     = list(radius_m = MAX_R)
+)
+
+stopifnot("dist_to_medoid" %in% names(clara_run$sites))
+
+# ---- Post-processing: year rule enforcement on unique sites ----
+clara_sites_year <- clara_run$sites |>
+  enforce_year_rule()
+
+# Final IDs and flags (cluster_missing etc.)
+clara_sites_final <- clara_sites_year |>
+  finalize_cluster_ids(method_tag = "CLARA")
+
+# Cluster metadata should be recomputed AFTER year-rule changes
+clara_clusters_final <- summarize_clusters(clara_sites_final, method_tag = "CLARA")
+
+# ---- Join back to the full time-series dataset ----
+model_df_clara <- join_clusters_back(
+  model_df_tagged     = model_df_tagged,
+  sites_tbl_clustered = clara_sites_final,
+  join_by             = c("AEZ", "lat_r", "lon_r")
+)
+
+# ---- Export bundle (single call; all I/O here) ----
+clara_bundle <- export_bundle(
+  out_prefix = paste0("outputs/clara_rad_", R_KM_STR, "km"),
+  model_df_clustered  = model_df_clara,
+  sites_tbl_clustered = clara_sites_final,
+  clusters_meta       = clara_clusters_final,
+  params = list(
+    run_tag = "CLARA",
+    engine = "engine_clara",
+    radius_m = MAX_R,
+    engine_params = clara_run$run_meta$engine_params,
+    switch_n_threshold = clara_run$run_meta$switch_n_threshold,
+    fallback_engine = clara_run$run_meta$fallback_engine,
+    fallback_params = clara_run$run_meta$fallback_params,
+    checkpoint_dir = clara_run$run_meta$checkpoint_dir,
+    log_path = clara_run$run_meta$log_path
+  )
+)
+
+# Quick diagnostics
+summary(clara_clusters_final$max_dist_to_medoid)
+table(sapply(clara_run$engine_meta_by_aez, `[[`, "engine_method_used"), useNA = "ifany")
+
+```
+
+## CLARA radius sensitivity
+```{r}
+radius_grid_km <- seq(8, 25, by = 1)
+radius_grid_m  <- radius_grid_km * 1000
+
+clara_tradeoff_both <- purrr::map_dfr(
+  radius_grid_m,
+  ~evaluate_radius_pre_post(
+    sites_tbl   = sites_tbl,
+    radius_m    = .x,
+    engine_fun  = engine_clara,
+    method_name = "CLARA",
+    engine_params = list(
+      k_start  = 2L,
+      k_max    = 800L,   # if you see max_radius_observed > radius target, raise this
+      samples  = 5L,
+      sampsize = NULL,   # let engine decide; or set e.g. 2000L for stability
+      seed     = 1L
+    ),
+    radius_param    = "radius_m",
+    year_single_col = "years_single"
+  )
+)
+
+clara_tradeoff_pre  <- clara_tradeoff_both |> dplyr::filter(stage == "pre_screen")
+clara_tradeoff_post <- clara_tradeoff_both |> dplyr::filter(stage == "post_screen")
+
+ggplot(clara_tradeoff_both, aes(x = radius_km, y = pct_sites_in_2plus_year_clusters, linetype = stage)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "CLARA: % of sites in ≥2-year clusters (pre vs post year-screen)",
+    x = "Radius (km)",
+    y = "% of unique sites"
+  )
+
+ggplot(clara_tradeoff_post, aes(x = radius_km, y = median_cluster_size)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "CLARA: Median cluster size (post-screen)",
+    x = "Radius (km)",
+    y = "Median cluster size"
+  )
+
+ggplot(clara_tradeoff_post, aes(x = radius_km, y = n_aez_with_clusters)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "CLARA: AEZs with ≥1 usable cluster (post-screen)",
+    x = "Radius (km)",
+    y = "Number of AEZs"
+  )
+
+ggplot(clara_tradeoff_post, aes(x = radius_km, y = effective_cluster_years)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "CLARA: Total cluster-year observations (post-screen)",
+    x = "Radius (km)",
+    y = "Sum of distinct years across clusters"
+  )
+
+# Optional but recommended sanity check: is CLARA actually meeting the radius cap?
+ggplot(clara_tradeoff_pre, aes(x = radius_km, y = max_radius_observed / 1000)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "CLARA: Observed max dist-to-medoid vs target (pre-screen)",
+    x = "Target radius (km)",
+    y = "Observed max dist-to-medoid (km)"
+  )
+```
+
+## ============================================================
+## Diagnostics (works for PAMR / greedy cover / CLARA bundles)
+## ============================================================
+```{r}
+
+library(dplyr)
+library(purrr)
+library(stringr)
+library(tidyr)
+library(readr)
+
+# helpers: parse radius + method from filename
+parse_radius_km <- function(path) {
+  x <- basename(path)
+  m <- str_match(x, "([0-9]+(?:\\.[0-9]+)?)km")[, 2]
+  as.numeric(m)
+}
+
+parse_method <- function(path) {
+  x <- tolower(basename(path))
+  if (str_detect(x, "clara"))  return("CLARA")
+  if (str_detect(x, "pam"))    return("PAM")
+  if (str_detect(x, "greedy")) return("GREEDY")
+  "UNKNOWN"
+}
+
+# ---- compute cluster-year estimate from your site-level fields ----
+cluster_years_summary <- function(sites, year_single_col = "years_single") {
+  stopifnot(all(c("AEZ", "cluster_within_aez", "n_years") %in% names(sites)))
+  stopifnot(year_single_col %in% names(sites))
+
+  sites |>
+    filter(cluster_within_aez > 0L) |>
+    group_by(AEZ, cluster_within_aez) |>
+    summarise(
+      n_sites = n(),
+      has_multi_year_site = any(n_years > 1, na.rm = TRUE),
+      distinct_single_years = n_distinct(sites[[year_single_col]][n_years == 1], na.rm = TRUE),
+      est_distinct_years = ifelse(has_multi_year_site, pmax(2, distinct_single_years), distinct_single_years),
+      max_dist_to_medoid = if ("dist_to_medoid" %in% names(sites)) {
+        m <- suppressWarnings(max(dist_to_medoid, na.rm = TRUE))
+        if (is.finite(m)) m else NA_real_
+      } else NA_real_,
+      .groups = "drop"
+    )
+}
+
+# ---- one bundle -> one row of metrics ----
+summarize_bundle <- function(bundle, method, radius_km, year_single_col = "years_single") {
+  sites <- bundle$sites_tbl_clustered
+  stopifnot(!is.null(sites))
+
+  # if cluster_missing not present, derive it
+  if (!("cluster_missing" %in% names(sites))) {
+    sites <- sites |>
+      mutate(cluster_missing = cluster_within_aez == 0L | is.na(cluster_within_aez))
+  }
+
+  n_total_sites <- nrow(sites)
+  n_clustered_sites <- sum(sites$cluster_within_aez > 0L, na.rm = TRUE)
+
+  cl <- cluster_years_summary(sites, year_single_col = year_single_col)
+
+  tibble(
+    method = method,
+    radius_km = radius_km,
+
+    n_sites_total = n_total_sites,
+    pct_sites_clustered = 100 * n_clustered_sites / n_total_sites,
+
+    n_clusters = nrow(cl),
+    n_clusters_2plus_years = sum(cl$est_distinct_years >= 2, na.rm = TRUE),
+    pct_clusters_2plus_years = if (nrow(cl) == 0) NA_real_ else 100 * mean(cl$est_distinct_years >= 2, na.rm = TRUE),
+
+    n_aez_with_clusters = n_distinct(sites$AEZ[sites$cluster_within_aez > 0L]),
+    effective_cluster_years = if (nrow(cl) == 0) 0 else sum(cl$est_distinct_years, na.rm = TRUE),
+
+    median_cluster_size = if (nrow(cl) == 0) NA_real_ else median(cl$n_sites, na.rm = TRUE),
+    p90_cluster_size = if (nrow(cl) == 0) NA_real_ else as.numeric(quantile(cl$n_sites, 0.9, na.rm = TRUE)),
+    max_cluster_size = if (nrow(cl) == 0) NA_real_ else max(cl$n_sites, na.rm = TRUE),
+
+    max_radius_observed_km = if (nrow(cl) == 0) NA_real_ else max(cl$max_dist_to_medoid, na.rm = TRUE) / 1000
+  )
+}
+
+## ----------------------------
+## Load bundles from ./outputs
+## (relative to the Rmd location)
+## ----------------------------
+bundle_dir <- file.path(dirname(knitr::current_input()), "outputs")
+bundle_paths <- list.files(bundle_dir, pattern = "_bundle\\.rds$", full.names = TRUE)
+
+# radii you ran
+target_radii <- c(12.5, 20, 25)
+
+# build table of metrics
+bundle_tbl <- map_dfr(bundle_paths, function(p) {
+  rad <- parse_radius_km(p)
+  meth <- parse_method(p)
+
+  # skip files that don't parse cleanly
+  if (is.na(rad) || !(rad %in% target_radii)) return(NULL)
+
+  b <- readRDS(p)
+  summarize_bundle(
+    bundle = b,
+    method = meth,
+    radius_km = rad,
+    year_single_col = "years_single"
+  )
+}) |>
+  arrange(method, radius_km)
+
+# optional sanity check: show what was found
+print(bundle_tbl |> count(method, radius_km))
+
+## ----------------------------
+## Decision table (clean cols)
+## ----------------------------
+decision_tbl <- bundle_tbl |>
+  arrange(method, radius_km) |>
+  mutate(
+    pct_sites_clustered = round(pct_sites_clustered, 1),
+    median_cluster_size = round(median_cluster_size, 1),
+    p90_cluster_size = round(p90_cluster_size, 1),
+    max_radius_observed_km = round(max_radius_observed_km, 2)
+  ) |>
+  select(
+    method,
+    radius_km,
+    pct_sites_clustered,
+    n_clusters,
+    n_aez_with_clusters,
+    effective_cluster_years,
+    median_cluster_size,
+    p90_cluster_size,
+    max_radius_observed_km
+  )
+
+## ----------------------------
+## Three separate tables
+## ----------------------------
+pam_tbl    <- decision_tbl |> filter(method == "PAM")    |> arrange(radius_km)
+clara_tbl  <- decision_tbl |> filter(method == "CLARA")  |> arrange(radius_km)
+greedy_tbl <- decision_tbl |> filter(method == "GREEDY") |> arrange(radius_km)
+
+# print the three tables
+pam_tbl
+clara_tbl
+greedy_tbl
+
+## ----------------------------
+## Write three separate CSVs
+## ----------------------------
+write_csv(pam_tbl,    "cluster_method_comp_PAM.csv")
+write_csv(clara_tbl,  "cluster_method_comp_CLARA.csv")
+write_csv(greedy_tbl, "cluster_method_comp_GREEDY.csv")
+
+```
+
+# Creating plots for each clustering method using above functions
+```{r}
+decision_tbl <- bundle_tbl |>
+  arrange(method, radius_km) |>
+  mutate(
+    pct_sites_clustered = round(pct_sites_clustered, 1),
+    median_cluster_size = round(median_cluster_size, 1),
+    p90_cluster_size = round(p90_cluster_size, 1),
+    max_radius_observed_km = round(max_radius_observed_km, 2)
+  ) |>
+  select(
+    method,
+    radius_km,
+    pct_sites_clustered,
+    n_clusters,
+    n_aez_with_clusters,
+    effective_cluster_years,
+    median_cluster_size,
+    p90_cluster_size,
+    max_radius_observed_km
+  )
+
+decision_tbl
+
+readr::write_csv(decision_tbl, "cluster_method_comparison_table.csv")
+
+
+```
+
+# Map to visualize clustering
+```{r}
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Read AEZ polygons
+file_location <- ("C:/Users/user/OneDrive - Massachusetts Institute of Technology/Research/spatial_datasets/AEZs/AEZ_shp_file.shp")
+aez <- read_sf(file_location) %>%
+  st_make_valid() %>%
+  select(Id, AEZ)
+
+# histogram of cluster sizes
+ggplot(clusters, aes(x = n_sites)) +
+  geom_histogram(bins = 50) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(
+    title = "Cluster size distribution (unique sites)",
+    x = "Cluster size (log10 scale)",
+    y = "Count"
+  )
+
+# radius vs size scatter plot
+if ("max_dist_to_medoid" %in% names(clusters)) {
+  ggplot(clusters, aes(x = n_sites, y = max_dist_to_medoid)) +
+    geom_point(alpha = 0.5) +
+    scale_x_log10() +
+    theme_minimal() +
+    labs(
+      title = "Cluster size vs max distance to medoid",
+      x = "Cluster size (log10)",
+      y = "Max dist to medoid (m)"
+    )
+}
+
+## Map plots
+
+# Choose an AEZ to inspect (largest, or most missing, etc.)
+aez_pick <- aez_diag$AEZ[1]  # e.g., worst pct_missing; change as you like
+
+# Use the UNIQUE SITES table (not full time-series)
+pts <- sites |>
+  dplyr::filter(AEZ == aez_pick, !cluster_missing) |>
+  sf::st_as_sf(coords = c("lon_r", "lat_r"), crs = 4326, remove = FALSE)
+
+ggplot(pts) +
+  geom_sf(aes(color = factor(cluster_within_aez)), size = 0.7, alpha = 0.85) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = paste0("Clusters in AEZ ", aez_pick, " (unique sites)"))
+
+# amend - map to visualize the clusters with OV, colored - minmax to transform it from logged to unlogged - to see if there is Ov variance over time - do by AEZ; this is the best way to differentiate between the clustering approaches - send over email
+
+# which of the AEZs missing? table of how many clusters per AEZ? is it important?
+
+# deforestation & cluster spatial match; how far beyond? do a sensitivity analysis; then run the regression/correlation
+
+# different deforestation drivers may have differential effects; keep simple for now
+
+# reach out to Kevin on ncdf file troubles, Etienne also has scripts for reading them
+
+# send scripts directly and upload to Github as well w/o the big data files; send draft of outline 
+```

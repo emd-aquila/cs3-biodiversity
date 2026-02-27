@@ -1,0 +1,93 @@
+---
+title: "BioTIME Taxonomy Matching"
+author: "Eli Duggan"
+date: "2025-06-20"
+output: html_document
+---
+
+# Import packages
+```{r setup, include=FALSE}
+pkgs <- c("dplyr", "purrr", "data.table")
+to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(to_install)) install.packages(to_install)
+
+library(dplyr)
+library(purrr)
+library(data.table)
+```
+
+```{r}
+batch_files <- list.files("./data/cache/", pattern = "^classified_batch_\\d{3}\\.rds$", full.names = TRUE)
+
+if (length(batch_files) == 0) {
+  stop("No classified batch .rds files found in ./data/cache/")
+} else {
+  cat("Found", length(batch_files), "classified batch files.\n")
+}
+```
+
+# Combine the batch .rds files from the .ipynb script
+```{r}
+# Load classified batch .rds files
+batch_files <- list.files("./data/cache/", pattern = "^classified_batch_\\d+\\.rds$", full.names = TRUE)
+stopifnot(length(batch_files) > 0)
+
+df_all <- df_all %>%
+  mutate(is_classified = if_all(all_of(required_fields), ~ !is.na(.)))
+
+classified <- df_all %>%
+  filter(!is.na(class) & source != "not_found")
+
+unclassified <- df_all %>%
+  filter(is.na(class) | source == "not_found")
+
+cat("Taxonomic batch classification complete.\n")
+cat("Total species:      ", nrow(df_all), "\n")
+cat("Classified species: ", nrow(classified), "\n")
+cat("Unclassified:       ", nrow(unclassified), "\n")
+```
+
+# Load datasets: raw BioTIME, entries with valid_name resolved
+```{r}
+# Load data
+resolved <- readRDS("./data/resolved_names.rds")
+biotime_data <- readRDS("./input_files/biotime_v2_query_15April25.rds")
+```
+
+# normalize keys for matching
+```{r}
+# Use fast data.table keying for large objects
+setDT(classified)[, genus_species := tolower(trimws(genus_species))]
+
+setDT(resolved)[, `:=`(
+  resolved_name = tolower(trimws(resolved_name)),
+  valid_name = tolower(trimws(valid_name)))]
+
+setDT(biotime_data)[, valid_name := tolower(trimws(valid_name))]
+```
+
+# Join classified taxonomy + resolved entries by scientific name
+```{r}
+resolved_taxonomy <- merge(
+  resolved[, .(valid_name, resolved_name)],
+  classified[, .SD, .SDcols = setdiff(names(classified), "error")],
+  by.x = "resolved_name", by.y = "genus_species",
+  all.x = TRUE, sort = FALSE)
+
+# deduplicate to prevent double entries
+setkey(resolved_taxonomy, valid_name)
+resolved_taxonomy <- unique(resolved_taxonomy, by = "valid_name")
+```
+
+# Join taxonomy into BioTIME by valid_name
+```{r}
+biotime_taxonomy <- merge(
+  biotime_data,
+  resolved_taxonomy,
+  by = "valid_name", all.x = TRUE, sort = FALSE)
+```
+
+# Save output files
+```{r}
+saveRDS(biotime_taxonomy, "./data/taxonomy_assigned.rds")
+```

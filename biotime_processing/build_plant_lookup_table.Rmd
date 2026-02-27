@@ -1,0 +1,75 @@
+---
+title: "BioTIME Build Plant Code Lookup (BONAP-style)"
+author: "CS3 Biodiversity"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Install and load required packages
+pkgs <- c("dplyr", "stringr", "readr")
+to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(to_install)) install.packages(to_install)
+
+library(dplyr)
+library(stringr)
+library(readr)
+```
+
+# Load GBIF backbone taxonomy
+```{r}
+# Assign and load species backbone data
+gbif_data <- readRDS("../data/Taxon.rds")
+cat("Loaded", nrow(gbif_data), "total GBIF backbone records.\n")
+
+#https://hosted-datasets.gbif.org/datasets/backbone/current/
+# Backbone data from GBIF circa June 2025
+```
+
+# Filter to species-level entries for vascular plants
+```{r}
+# Keep only species-level entries with valid genus + species
+plant_species <- gbif_data %>%
+  filter(
+    taxonRank == "species",
+    phylum == "Tracheophyta",   #restricts to vascular plants only
+    !is.na(genus),
+    !is.na(specificEpithet)
+  ) %>%
+  distinct(genus, specificEpithet, .keep_all = TRUE)
+
+cat("Extracted", nrow(plant_species), "species-level entries.\n")
+```
+
+# Build 8-character (4 genus, 4 species), 7-character (3 genus, 4 species or vice-versa) BONAP-like codes
+```{r}
+plant_lookup <- plant_species %>%
+  mutate(
+    code8 = paste0(
+      toupper(str_pad(substr(genus, 1, 4), 4, pad = "X")),
+      toupper(str_pad(substr(specificEpithet, 1, 4), 4, pad = "X"))
+    ),
+    code7_3_4 = paste0(
+      toupper(substr(genus, 1, 3)),
+      toupper(substr(specificEpithet, 1, 4))
+    ),
+    code7_4_3 = paste0(
+      toupper(substr(genus, 1, 4)),
+      toupper(substr(specificEpithet, 1, 3))
+    ),
+    plant_binomial = paste(genus, specificEpithet)
+  )
+  
+# Sequential deduplication on each code variant
+plant_lookup <- plant_lookup %>%
+  group_by(code8) %>% slice(1) %>% ungroup() %>%
+  group_by(code7_3_4) %>% slice(1) %>% ungroup() %>%
+  group_by(code7_4_3) %>% slice(1) %>% ungroup()
+
+plant_lookup_slim <- plant_lookup %>%
+  select(plant_binomial, code8, code7_3_4, code7_4_3, taxonID)
+```
+
+# Export BONAP-style lookup table to the pipeline
+```{r}
+saveRDS(plant_lookup_slim,"../input_files/plant_codes.rds")
+```

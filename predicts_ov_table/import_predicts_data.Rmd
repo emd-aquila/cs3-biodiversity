@@ -1,0 +1,159 @@
+---
+title: "PREDICTS Data Preparation + Filter"
+author: "Eli Duggan"
+date: "11/26/2025"
+output:html_document
+---
+
+<!---
+This file prepares PREDICTS site‑level data for downstream
+analysis.  It uses the `predictsr` package to download a consistent
+release of the PREDICTS database, filters the data to a relevant date
+range, and retains only the columns needed for calculating
+biodiversity indicator components and identifying sites.  The resulting cleaned
+table is saved as a CSV and used in subsequent steps.
+
+**Summary of steps:**
+
+1. Install and load required packages.
+2. Download the full PREDICTS database and cache via 'GetPredictsData()'.
+3. Keep only abundance‑based measurements.
+4. Convert the sampling midpoint to a Date and filter to 2001–2023 inclusive.
+5. Select the columns needed to replicate merged_df_raw.csv (Biome, Predominant_land_use, Use_intensity, Kingdom–Genus, Diversity_metric, Diversity_metric_type, Effort_corrected_measurement, Reference, Site_name, 
+Site_number, Latitude, Longitude, Sample_* and any other fields you want).
+6. Save the filtered table as a CSV
+7. Sample a subset of sites for testing. 
+-->
+
+## The files `r output_full` and `r output_sample` contain, respectively, the full filtered PREDICTS data and a random subset of `r n_sample_sites` sites.  These tables replicate the structure of Stan’s `merged_df_raw.csv` and can be used as inputs to the indicator calculation workflow.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+```
+
+## Install and load packages
+
+```{r packages}
+# If predictsr is not already installed, uncomment the next line to install it from CRAN.
+install.packages("predictsr")
+
+library(predictsr)
+library(dplyr)
+library(readr)
+library(lubridate)
+```
+
+## Configure extract years, date ranges, and output
+
+```{r config}
+# Choose which PREDICTS extract(s) to download.
+extract_years <- c(2016, 2022)  # do both years for completeness
+
+# Date range for filtering sample midpoint
+date_min <- as.Date("2000-01-01")
+date_max <- as.Date("2024-12-31")
+```
+
+## Download and inspect the full PREDICTS database
+
+We must work with the **full** PREDICTS database rather than the site‑level summaries.  The full database contains one row per taxon observation at each site and therefore retains the raw abundance measurements.  We use the `LoadPredictsData()` function from `predictsr` to download the requested extract and save it locally
+
+```{r download}
+# Cache databse here to access between sessions if needed
+cache_file <- "C:/Users/user/OneDrive - MIT/Research/cs3-biodiversity/predicts_table_chat/data/predicts_full.rds"
+
+# Load the full database
+predicts_raw <- LoadPredictsData(cache_file, extract = extract_years)
+
+# Inspect the structure of the loaded data. 4 million+ rows and 65 columns; 
+# for reproducibility we print simple summaries rather than the entire object.
+str(predicts_raw)
+```
+
+## Filter to abundance metrics and date range
+
+Filter by Diversity_metric_type == "Abundance" so Stan's script can work.
+
+Convert`Sample_midpoint` to a date and restrict to midpoints between 2000 and 2024 inclusive.
+
+```{r filter}
+predicts_filtered <- predicts_raw %>%
+  mutate(
+    Sample_midpoint = as.Date(Sample_midpoint),
+    Year            = year(Sample_midpoint)
+  ) %>%
+  filter(
+    Diversity_metric_type == "Abundance",
+    !is.na(Sample_midpoint),
+    Sample_midpoint >= date_min,
+    Sample_midpoint <= date_max
+  )
+```
+
+## Select relevant columns
+
+# Mirroring Stan's 'merged_df_raw.csv', we select a subset of columns with our geographical, ecological, taxonomic metadata. These are the same headers.
+
+```{r select}
+cols_keep <- c(
+  "Reference", "Study_number", "Site_name", "Site_number", "Source_ID", "SSBS",
+  "Country",
+  "Biome", "Predominant_land_use", "Use_intensity",
+  "Years_since_fragmentation_or_conversion",
+  "UN_subregion",
+  "Hotspot",
+  "Latitude", "Longitude",
+  "Kingdom", "Phylum", "Class", "Order", "Family", "Genus",
+  "Diversity_metric_unit",
+  "Effort_corrected_measurement", "Measurement",
+  "Sampling_effort", "Sampling_effort_unit", 
+  "Sample_date_resolution", "Sample_start_earliest", "Sample_end_latest", "Sample_midpoint"
+)
+
+predicts_clean <- predicts_filtered %>% select(any_of(cols_keep))
+glimpse(predicts_clean)
+```
+
+## OPTIONAL: sample a subset of sites for workflow testing to validate things
+
+The code below randomly selects a specified number of unique sites (identified by `SSBS`) and returns all abundance observations from those sites.  Set `n_sample_sites = NA` to keep all sites
+
+```{r sample, message=TRUE}
+# Number of sites to sample for testing.  Set to NA to keep all.
+n_sample_sites <- 30
+
+if (!is.na(n_sample_sites) && n_sample_sites < n_distinct(predicts_clean$SSBS)) {
+  set.seed(123)
+  sampled_sites <- predicts_clean %>%
+    distinct(SSBS) %>%
+    sample_n(n_sample_sites)
+  predicts_sample <- predicts_clean %>%
+    semi_join(sampled_sites, by = "SSBS")
+} else {
+  predicts_sample <- predicts_clean
+}
+
+glimpse(predicts_sample)
+```
+
+## Save cleaned table
+
+```{r write-out}
+# Define output filename based on whether sampling was applied
+output_full <- paste0(
+  "predicts_filtered_",
+  format(date_min, "%Y"), "_",
+  format(date_max, "%Y"),
+  ".csv"
+)
+
+output_sample <- paste0(
+  "predicts_sample_filtered_",
+  format(date_min, "%Y"), "_",
+  format(date_max, "%Y"), "_",
+  n_sample_sites, "sites.csv"
+)
+
+write_csv(predicts_clean, output_full)
+# write_csv(predicts_sample, output_sample)
+```
