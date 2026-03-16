@@ -1,0 +1,103 @@
+---
+title: "Import PREDICTS Data and Filter 2001-2024"
+author: "Eli Duggan"
+date: "11/26/2025"
+---
+
+<!---
+This file prepares PREDICTS site‑level data for downstream analysis.  It uses the `predictsr` package to download a consistent
+release of the PREDICTS database, filters the data to a relevant date range, and retains only the columns needed for calculating
+biodiversity indicator components and identifying sites.  The resulting cleaned table is saved as a CSV and used in subsequent steps.
+
+**Summary of steps:**
+
+1. Download the full PREDICTS database and cache via 'GetPredictsData()'.
+2. Keep only abundance‑based measurements.
+3. Convert the sampling midpoint to a Date and filter to 2000–2024 inclusive.
+4. Select the columns needed to replicate merged_df_raw.csv (Biome, Predominant_land_use, Use_intensity, Kingdom–Genus, Diversity_metric, Diversity_metric_type, Effort_corrected_measurement, Reference, Site_name, Site_number, Latitude, Longitude, Sample_* and any other fields you want).
+5. Save the filtered table as "a CSV"
+
+-->
+
+## The output files contain, respectively, the full filtered PREDICTS data, which can be used as inputs to the indicator calculation workflow.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+```
+
+## Install and load packages
+```{r packages}
+# install.packages("predictsr")
+
+library(predictsr)
+library(dplyr)
+library(readr)
+library(lubridate)
+```
+
+## Configuration: extract years, date ranges, and output
+```{r config}
+# Extract complete PREDICTS dataset for 2016 and 2022 releases
+extract_years <- c(2016, 2022)  
+
+# Date range for filtering sample midpoint
+date_min <- as.Date("2000-01-01")
+date_max <- as.Date("2024-12-31")
+
+# tmp and output directories
+tmp_dir <- file.path("..", "tmp")
+out_dir <- file.path("..", "output")
+dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Download the full PREDICTS database with LoadPredictsData()
+```{r download}
+tmp_file <- file.path(tmp_dir, "predicts.rds")
+predicts_raw <- LoadPredictsData(tmp_file, extract = extract_years)
+```
+
+## Filter to abundance metrics and 2000-2024 date range, select relevant columns 
+```{r filter}
+predicts_filtered <- predicts_raw %>%
+  mutate(
+    Sample_midpoint = as.Date(Sample_midpoint),
+    Year            = year(Sample_midpoint)
+  ) %>%
+  filter(
+    Diversity_metric_type == "Abundance",
+    !is.na(Sample_midpoint),
+    Sample_midpoint >= date_min,
+    Sample_midpoint <= date_max
+  )
+
+cols_keep <- c(
+  "Reference", "Study_number", "Site_name", "Site_number", "Source_ID", "SSBS",
+  "Country",
+  "Biome", "Predominant_land_use", "Use_intensity",
+  "Years_since_fragmentation_or_conversion",
+  "UN_subregion",
+  "Hotspot",
+  "Latitude", "Longitude",
+  "Kingdom", "Phylum", "Class", "Order", "Family", "Genus",
+  "Diversity_metric_unit",
+  "Effort_corrected_measurement", "Measurement",
+  "Sampling_effort", "Sampling_effort_unit", 
+  "Sample_date_resolution", "Sample_start_earliest", "Sample_end_latest", "Sample_midpoint"
+)
+
+predicts_clean <- predicts_filtered %>% select(any_of(cols_keep))
+```
+
+## Output cleaned PREDICTS data as "predicts_filtered_2000_2024"
+```{r write-out}
+# Define output filename based on whether sampling was applied
+output_file_name <- paste0(
+  "predicts_filtered_",
+  format(date_min, "%Y"), "_",
+  format(date_max, "%Y"),
+  ".csv"
+)
+
+write_csv(predicts_clean, out_dir, output_file_name)
+```

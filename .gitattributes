@@ -3,3 +3,4 @@ biotime_pipeline/input_files/biotime_v2_query_15April25.rds filter=lfs diff=lfs 
 # Prevent accidental tracking of .csv or .ipynb
 *.csv !filter !diff !merge text
 *.ipynb !filter !diff !merge text
+*.dbf filter=lfs diff=lfs merge=lfs -text

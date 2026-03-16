@@ -1,29 +1,40 @@
-#R
+# R
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
 .RDataTmp
-
-# Output files
-*.csv
-*.tsv
-*.json
+*.RDataTmp*
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Working files
+# Derived / generated files
+*.rds
+*.tsv
+*.json
+
+# Ignore CSVs by default
+*.csv
+
+
+# Working directories
 **/data/
 **/name_files/
 **/old/
 **/checkpoints
+**/tmp/
 
-# Allow clustering outputs
-!clustering/outputs/*.csv
-!clustering/outputs/*.rds
+# Keep folder structure
+**/input/.gitkeep
+**/output/.gitkeep
+**/tmp/.gitkeep
 
-# allow some OV tables
-!predicts_ov_table/biodiversity_sites_AEZ_tag.csv
-!predicts_ov_table/pd_result.csv
+# Allow only selected CSV outputs to be versioned
+!clustering/output/*.csv
+!predicts_ov_table/analysis/output/ov_AEZ_tag.csv
+!predicts_ov_table/build/output/pd_result.csv
+
+# Explicitly ignore very large generated file
+predicts_ov_table/build/output/predicts_filtered_2000_2024.csv

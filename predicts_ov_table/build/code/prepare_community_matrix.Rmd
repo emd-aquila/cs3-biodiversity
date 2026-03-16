@@ -1,0 +1,137 @@
+---
+title: "R Notebook"
+author: "Stanley Tan (original), Eli Duggan (edits)"
+output: html_document
+---
+
+<!-- This script, developed by Stanley (originally "script.Rmd"), uses the raw PREDICTS data to calculate the OV component scores and integrate these into a class-level OV score for each site. 
+
+contains code on  -->
+<!-- the development of indicator component scores and the integration of scores to calculate OV.  -->
+<!-- Coordinates are also added. -->
+
+## Libraries
+```{r}
+library(ape)
+library(picante)
+library(tidyverse)
+```
+
+## Configuration
+```{r}
+# Directories
+tmp_dir <- file.path("..", "tmp")
+out_dir <- file.path("..", "output")
+in_dir <- file.path("..", "input")
+dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# File paths
+family_present_file   <- file.path(tmp_dir, "family_names_present.txt")
+family_unmatched_file <- file.path(tmp_dir, "family_names_unmatched.txt")
+pd_out_file           <- file.path(out_dir, "pd_result.csv")
+tree_file             <- file.path(in_dir, "iphylo_tree.nwk")
+input_csv             <- file.path(out_dir, "predicts_filtered_2000_2024.csv")
+```
+
+## Read and prepare data
+```{r}
+raw_data <- read_csv(input_csv, show_col_types = FALSE) %>%
+  mutate(
+    Sample_midpoint = as.Date(Sample_midpoint),
+    sample_id = paste(SSBS, Sample_midpoint, sep = "__")
+  )
+```
+
+## Export list of family names (for phyloT)
+```{r}
+phylo_df <- raw_data %>%
+  select(Reference, SSBS, Kingdom:Genus, Effort_corrected_measurement) %>%
+  filter(Effort_corrected_measurement != 0) %>%
+  mutate(combined_taxonomy = paste(Kingdom, Phylum, Class, Order, Family, Genus, sep = ","))
+
+family_names <- phylo_df %>%
+  distinct(Family) %>%
+  filter(!is.na(Family))
+
+write.table(
+  family_names$Family,
+  file = family_present_file,
+  sep = ",",
+  row.names = FALSE,
+  col.names = FALSE,
+  quote = FALSE
+)
+
+unmatched_names <- c("Napoleonaceae", "Carcinophoridae", "Aphodiidae", "Rhipiphoridae", "Oriolidae",
+                     "Melolonthidae", "Cephalotaxaceae", "Cetoniidae", "Troglodytidae", "Emberizidae",
+                     "Anobiidae", "Scydmaenidae", "Coerebidae", "Corytophanidae", "Xanthorrhoeaceae",
+                     "Cracticidae", "Eumenidae", "Aromobatidae", "Agoutidae", "Callitrichidae",
+                     "Neosittidae", "Pangrolaimidae", "Paratropididae", "Viduidae", "Aegithinidae",
+                     "Tropiduridae", "Protoribatidae", "Arctiidae", "Lymantriidae", "Cyphoderidae",
+                     "Melianthaceae", "Dynastidae", "Pteroclididae", "Dryophthoridae", "Opluridae",
+                     "Chrysothricaceae", "Not assigned", "Masaridae", "Austrachipteriidae", "Ptilocercidae",
+                     "Ptilogonatidae", "Languriidae", "Hemiprocnidae", "Bankeraceae", "Phallogastraceae",
+                     "Corethrellidae", "Indridae", "Symmocidae", "Rhyscotidae", "Ascalaphidae",
+                     "Tubiferaceae", "Scoliciosporaceae", "Cinclidotaceae", "Taenitidaceae", "Ganodermataceae",
+                     "Cantacaderidae", "Epimerellidae", "Biatorellaceae", "Eupetidae", "Remizidae",
+                     "Rutelidae", "Thyrisomidae", "Oxydiridae", "Rhynchitidae", "Heterozetidae",
+                     "Stemonitidaceae", "Anomalepidae", "Pudeoniscidae", "Odontorhabditidae", "Labidostommidae",
+                     "Laelaptidae", "Pleuroziopsaceae", "Charipidae", "Paraphelenchidae", "Myoxidae",
+                     "Microzetidae", "Aleurodamaeidae", "Plateremaeidae", "Spinozetidae", "NA")
+
+family_matched <- family_names %>%
+  filter(!Family %in% unmatched_names)
+
+# this is the export used to generate the phylotree
+write.table(
+  setdiff(family_names$Family, family_matched$Family),
+  file = family_unmatched_file,
+  sep = ",",
+  row.names = FALSE,
+  col.names = FALSE,
+  quote = FALSE
+)
+```
+
+## Prepare community matrix (sample_id x Family) for derivation of phylogenetic distance scores
+```{r}
+# 1. Define the sample unit for Phylogenetic distance
+pd_long <- raw_data %>%
+  filter(Effort_corrected_measurement > 0, !is.na(Family)) %>%
+  group_by(sample_id, Family) %>%
+  summarise(abundance = sum(Effort_corrected_measurement), .groups = "drop") %>%
+  mutate(abundance = round(abundance, 0))
+  
+comm <- pd_long %>%
+  pivot_wider(names_from = Family, values_from = abundance, values_fill = 0)
+
+comm_mat <- comm %>%
+  column_to_rownames("sample_id") %>%
+  as.data.frame()
+
+
+# 2. Read phylogenetic tree from phloyT and align taxa
+phylo_tree <- read.tree(tree_file)
+
+# Add f__ prefix if tree tips use it
+if (any(grepl("^f__", phylo_tree$tip.label)) && !any(grepl("^f__", colnames(comm_mat)))) {
+  colnames(comm_mat) <- paste0("f__", colnames(comm_mat))
+}
+
+# Prune tree to taxa present in data
+pruned_tree <- drop.tip(phylo_tree, setdiff(phylo_tree$tip.label, colnames(comm_mat)))
+
+# drop remaining columns not in the pruned tree
+comm_mat <- comm_mat[, colnames(comm_mat) %in% pruned_tree$tip.label, drop = FALSE]
+
+
+# 3. Compute Faith's Phylogenetic Diversity and output
+pd_out <- pd(samp = comm_mat, tree = pruned_tree, include.root = TRUE)
+
+pd_result <- pd_out %>%
+  rownames_to_column("sample_id") %>%
+  rename(phylo_div = PD)
+
+write_csv(pd_result, pd_out_file)
+```

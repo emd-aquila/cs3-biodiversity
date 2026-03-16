@@ -1,0 +1,406 @@
+---
+title: "R Notebook"
+author: "Stanley Tan (original), Eli Duggan (edits)"
+output: html_document
+---
+
+## Libraries and helper functions
+```{r}
+library(ape)
+library(picante)
+library(tidyverse)
+library(ggplot2)
+library(sf)
+
+ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE)
+  invisible(path)
+}
+
+minmax01 <- function(x) {
+  r <- range(x, na.rm = TRUE)
+  (x - r[1]) / (r[2] - r[1])
+}
+```
+
+## Configuration
+```{r}
+# Directories
+tmp_dir <- file.path("..", "tmp")
+out_dir <- file.path("..", "output")
+in_dir <- file.path("..", "input")
+build_out <- file.path("..", "..", "build", "output")
+dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Copy output files from "build"
+files_to_copy <- c("predicts_filtered_2000_2024.csv", "pd_result.csv")
+
+walk(files_to_copy, \(f) {
+  file.copy(
+    from = file.path(build_out, f),
+    to   = file.path(in_dir, f),
+    overwrite = TRUE
+  )
+})
+
+# File paths
+predicts_file <- file.path(in_dir, "predicts_filtered_2000_2024.csv")
+pd_file       <- file.path(in_dir, "pd_result.csv")
+```
+
+## Read input data
+```{r}
+predicts <- read_csv(predicts_file, show_col_types = FALSE) %>%
+  mutate(
+    Sample_midpoint = as.Date(Sample_midpoint),
+    sample_id = paste(SSBS, Sample_midpoint, sep = "__")
+  )
+pd       <- read_csv(pd_file, show_col_types = FALSE)
+```
+
+# Calculating subcomponents: Shannon index, MSA, HQI, HANPP
+```{r}
+# reusable abundance by taxon block
+taxon_ab <- predicts %>%
+  filter(Effort_corrected_measurement > 0) %>%
+  mutate(taxon = paste(Family, Genus, sep = "_")) %>%
+  group_by(sample_id, taxon) %>%
+  summarise(ab = sum(Effort_corrected_measurement), .groups = "drop") %>%
+  mutate(ab = round(ab, 0))
+
+## Shannon index (species count + evenness) at sample_id-level
+shann_index <- taxon_ab %>%
+  group_by(sample_id) %>%
+  mutate(p = ab / sum(ab)) %>%
+  summarise(shannon = -sum(p * log(p), na.rm = TRUE), .groups = "drop")
+print("Shannon index calculated.")
+
+## Mean Species Abundance (MSA) at sample_id-level
+msa <- taxon_ab %>%
+  group_by(sample_id) %>%
+  summarise(
+    site_total_ab  = sum(ab),
+    site_total_spp = n_distinct(taxon),
+    msa = round(site_total_ab / site_total_spp, 0),
+    .groups = "drop"
+  )
+print("MSA calculated.")
+
+## Habitat Quality Index at sample_id-level
+hqi_score <- predicts %>%
+  distinct(sample_id, Biome, Predominant_land_use, Use_intensity) %>%
+  filter(Predominant_land_use != "Cannot decide",
+         Use_intensity != "Cannot decide") %>%
+  mutate(
+    lu_score = if_else(
+      Predominant_land_use %in% c(
+        "Mature secondary vegetation",
+        "Secondary vegetation (indeterminate age)",
+        "Intermediate secondary vegetation",
+        "Primary vegetation",
+        "Young secondary vegetation"
+      ),
+      3, 1
+    ),
+    ui_score = case_when(
+      Use_intensity == "Minimal use" ~ -0.1,
+      Use_intensity == "Light use"   ~ -0.3,
+      Use_intensity == "Intense use" ~ -0.5,
+      TRUE ~ NA_real_
+    ),
+    hq_score = lu_score + ui_score
+  ) %>%
+  select(sample_id, hq_score)
+print("HQI calculated.")
+
+## HANPP
+hanpp_score <- predicts %>%
+  distinct(sample_id, Biome, Predominant_land_use, Use_intensity) %>%
+  mutate(
+    hanpp = case_when(
+      Predominant_land_use == "Urban" ~ "high",
+      Predominant_land_use %in% c(
+        "Primary vegetation",
+        "Mature secondary vegetation",
+        "Intermediate secondary vegetation",
+        "Young secondary vegetation",
+        "Secondary vegetation (indeterminate age)"
+      ) ~ "low",
+      Predominant_land_use %in% c("Cropland", "Plantation forest", "Pasture") &
+        Use_intensity == "Intense use" ~ "high",
+      Predominant_land_use %in% c("Cropland", "Plantation forest", "Pasture") &
+        Use_intensity %in% c("Minimal use", "Light use") ~ "low",
+      Predominant_land_use == "Cannot decide" | Use_intensity == "Cannot decide" ~ NA_character_,
+      TRUE ~ NA_character_
+    ),
+    hanpphigh = as.integer(hanpp == "high"),
+    hanpplow  = as.integer(hanpp == "low")
+  ) %>%
+  select(sample_id, hanpp, hanpphigh, hanpplow)
+print("HANPP calculated.")
+
+
+```
+
+## calculating PDF (sample_id by Class-level)
+```{r}
+# Define land use sets
+baseline_primary <- "Primary vegetation"
+baseline_secondary <- c(
+  "Young secondary vegetation",
+  "Intermediate secondary vegetation",
+  "Mature secondary vegetation",
+  "Secondary vegetation (indeterminate age)"
+)
+impact_uses <- c("Cropland", "Pasture", "Plantation forest", "Urban")
+
+# Resolve a single biome per sample_id (most frequent biome label)
+biome_lookup <- predicts %>%
+  filter(!is.na(sample_id), !is.na(Biome)) %>%
+  count(sample_id, Biome, name = "n") %>%
+  slice_max(order_by = n, n = 1, by = sample_id, with_ties = FALSE) %>%
+  select(sample_id, Biome) %>%
+  rename(Biome_resolved = Biome)
+
+# 1) Aggregate abundance to sample_id × Class × Biome_resolved × land-use
+pdf_base <- predicts %>%
+  select(sample_id, Class, Predominant_land_use, Effort_corrected_measurement) %>%
+  left_join(biome_lookup, by = "sample_id") %>%
+  filter(
+    !is.na(sample_id),
+    !is.na(Class),
+    !is.na(Biome_resolved),
+    Predominant_land_use != "Cannot decide",
+    Effort_corrected_measurement > 0
+  ) %>%
+  group_by(sample_id, Class, Biome_resolved, Predominant_land_use) %>%
+  summarise(total_ab = sum(Effort_corrected_measurement), .groups = "drop") %>%
+  mutate(total_ab = round(total_ab, 2))
+
+# 2) Compute baseline abundance for each sample_id × Class × Biome_resolved
+baseline_tbl <- pdf_base %>%
+  mutate(
+    baseline_type = case_when(
+      Predominant_land_use == baseline_primary ~ "primary_b",
+      Predominant_land_use %in% baseline_secondary ~ "secondary_b",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(baseline_type)) %>%
+  group_by(sample_id, Class, Biome_resolved, baseline_type) %>%
+  summarise(baseline = mean(total_ab, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = baseline_type, values_from = baseline)
+
+# 3) Get impacted land-use totals per sample_id × Class × Biome_resolved
+impact_tbl <- pdf_base %>%
+  filter(Predominant_land_use %in% impact_uses) %>%
+  select(sample_id, Class, Biome_resolved, Predominant_land_use, total_ab) %>%
+  pivot_wider(
+    names_from = Predominant_land_use,
+    values_from = total_ab,
+    values_fill = 0
+  )
+
+# 4) Join and compute percent changes vs primary and secondary baselines
+#    (epsilon avoids division-by-zero blowups)
+eps <- 1e-7
+
+pdf_component <- baseline_tbl %>%
+  left_join(impact_tbl, by = c("sample_id", "Class", "Biome_resolved")) %>%
+  # keep rows that have at least one baseline
+  filter(!(is.na(primary_b) & is.na(secondary_b))) %>%
+  mutate(
+    cropland_pri   = 100 * (Cropland - primary_b) / (primary_b + eps),
+    pasture_pri    = 100 * (Pasture - primary_b) / (primary_b + eps),
+    plantation_pri = 100 * (`Plantation forest` - primary_b) / (primary_b + eps),
+    urban_pri      = 100 * (Urban - primary_b) / (primary_b + eps),
+
+    cropland_sec   = 100 * (Cropland - secondary_b) / (secondary_b + eps),
+    pasture_sec    = 100 * (Pasture - secondary_b) / (secondary_b + eps),
+    plantation_sec = 100 * (`Plantation forest` - secondary_b) / (secondary_b + eps),
+    urban_sec      = 100 * (Urban - secondary_b) / (secondary_b + eps)
+  ) %>%
+  mutate(across(
+    c(cropland_pri, pasture_pri, plantation_pri, urban_pri,
+      cropland_sec, pasture_sec, plantation_sec, urban_sec),
+    ~ round(., 0)
+  )) %>%
+  mutate(
+    mean_avg = rowMeans(
+      select(., cropland_pri, pasture_pri, plantation_pri, urban_pri,
+                cropland_sec, pasture_sec, plantation_sec, urban_sec),
+      na.rm = TRUE
+    ),
+    mean_avg = ifelse(is.nan(mean_avg), 0, mean_avg)
+  ) %>%
+  rename(Biome = Biome_resolved) %>%
+  select(
+    sample_id, Class, Biome,
+    primary_b, secondary_b,
+    Cropland, Pasture, `Plantation forest`, Urban,
+    cropland_pri, pasture_pri, plantation_pri, urban_pri,
+    cropland_sec, pasture_sec, plantation_sec, urban_sec,
+    mean_avg
+  )
+
+# 5) Integrity check: one row per sample_id × Class
+stopifnot(
+  nrow(pdf_component) ==
+    n_distinct(paste(pdf_component$sample_id, pdf_component$Class))
+)
+
+print("PDF calculated.")
+```
+
+## Prepare to assemble table of calculated OV components (PD, HANPP, MSA, Shannon Index, PDF, HQI)
+```{r}
+# Lookups for date and coordinates
+site_date_lookup <- predicts %>%
+  distinct(sample_id, SSBS, Sample_midpoint)
+
+coords_lookup <- predicts %>%
+  filter(!is.na(SSBS), !is.na(Latitude), !is.na(Longitude)) %>%
+  distinct(SSBS, Latitude, Longitude)
+
+# quality control coordinates - check each SSBS has one coordinate pair
+stopifnot(coords_lookup %>% count(SSBS) %>% summarise(all(n == 1)) %>% pull())
+
+# because PDF is calculated at class-level, we need to bring it to site-level to align with the rest of the OV components.
+pdf_sample <- pdf_component %>%
+  group_by(sample_id) %>%
+  summarise(mean_pct_change = mean(mean_avg, na.rm = TRUE), .groups = "drop")
+```
+
+# Assemble OV component table (site-level)
+```{r}
+combined_component_scores <- pd %>%   # <-- use pd (what you actually read)
+  select(sample_id, phylo_div, SR) %>%
+  left_join(pdf_sample,  by = "sample_id") %>%
+  left_join(shann_index, by = "sample_id") %>%
+  left_join(msa,         by = "sample_id") %>%
+  left_join(hqi_score,   by = "sample_id") %>%
+  left_join(hanpp_score, by = "sample_id") %>%
+  left_join(site_date_lookup, by = "sample_id") %>%
+  left_join(coords_lookup,    by = "SSBS") %>%
+  filter(!is.na(hanpp), !is.na(shannon), !is.nan(shannon))
+
+# QC: uniqueness (one row per sample_id)
+stopifnot(nrow(combined_component_scores) == n_distinct(combined_component_scores$sample_id))
+
+combined_out <- file.path(tmp_dir, "combined_component_scores_sitelevel.csv")
+write_csv(combined_component_scores, combined_out)
+```
+
+## Calculating OV score with scaled indicate
+```{r}
+# read in if needed
+# combined_component_scores <- read.csv("combined_component_scores_sitelevel.csv")
+
+model_df <- combined_component_scores %>%
+  mutate(
+    log_msa = log(msa + 1),
+    shannon_scaled = minmax01(shannon),
+    phylo_scaled   = minmax01(phylo_div),
+    log_msa_scaled = minmax01(log_msa),
+    ov_score =
+      hq_score +
+      shannon_scaled +
+      phylo_scaled +
+      log_msa_scaled +
+      0.2 * hanpphigh +
+      0.8 * hanpplow
+  ) %>%
+  select(
+    sample_id, Latitude, Longitude, Sample_midpoint,
+    hanpp, msa, hq_score, shannon, phylo_div,
+    hanpphigh, hanpplow, log_msa,
+    shannon_scaled, phylo_scaled, log_msa_scaled, ov_score
+  )
+
+ov_out <- file.path(tmp_dir, "ov_scores_sitelevel.csv")
+write_csv(model_df, ov_out)
+```
+
+## Assign AEZ
+```{r}
+sf_use_s2(FALSE)  # avoid polygon validity checks
+
+
+aez_path <- file.path("..","..","..","spatial_data", "aez", "AEZ_shp_file.shp")
+if (!file.exists(aez_path)) {
+  stop("AEZ shapefile not found at: ", normalizePath(aez_path, mustWork = FALSE))
+}
+
+aez <- read_sf(aez_path) %>%
+  st_make_valid() %>%
+  select(Id, AEZ)
+
+sites_sf <- model_df %>%
+  filter(!is.na(Longitude), !is.na(Latitude)) %>%
+  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326, remove = FALSE) %>%
+  st_transform(st_crs(aez))
+
+# strict tagging
+tagged <- st_join(sites_sf, aez, join = st_within, left = TRUE) %>%
+  st_drop_geometry()
+
+# nearest fallback for unassigned
+missing_idx <- which(is.na(tagged$AEZ))
+if (length(missing_idx) > 0) {
+  nearest_idx <- st_nearest_feature(sites_sf[missing_idx, ], aez)
+  tagged$AEZ[missing_idx] <- aez$AEZ[nearest_idx]
+}
+
+tagged <- tagged %>%
+  mutate(AEZ_assigned_by_nearest = row_number() %in% missing_idx) %>%
+  relocate(AEZ, .after = sample_id) %>%
+  relocate(AEZ_assigned_by_nearest, .after = AEZ)
+
+aez_out <- file.path(out_dir, "ov_AEZ_tag.csv")
+write_csv(tagged, aez_out)
+```
+
+## Optional diagnostic - Compare within and intersects for duplicates/missing assignments
+```{r}
+# I compared sf_within and sf_intersects to see which produces duplicates or untagged sites --> sf_within has no duplicates, so using it
+
+tag_within <- st_join(sites_sf, aez, join = st_within, left = TRUE) %>%
+  st_drop_geometry() %>%
+  group_by(sample_id) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(sample_id, AEZ_within = AEZ)
+
+tag_intersects <- st_join(sites_sf, aez, join = st_intersects, left = TRUE) %>%
+  st_drop_geometry() %>%
+  group_by(sample_id) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(sample_id, AEZ_intersects = AEZ)
+
+compare <- full_join(tag_within, tag_intersects, by = "sample_id")
+
+compare_summary <- compare %>%
+  summarise(
+    n_total = n(),
+    n_equal = sum(AEZ_within == AEZ_intersects, na.rm = TRUE),
+    n_diff  = sum(AEZ_within != AEZ_intersects, na.rm = TRUE),
+    n_within_only     = sum(!is.na(AEZ_within) & is.na(AEZ_intersects)),
+    n_intersects_only = sum(is.na(AEZ_within) & !is.na(AEZ_intersects)),
+    n_both_na         = sum(is.na(AEZ_within) & is.na(AEZ_intersects))
+  )
+
+print(compare_summary)
+
+compare_diffs <- compare %>%
+  filter(!is.na(AEZ_within), !is.na(AEZ_intersects), AEZ_within != AEZ_intersects)
+
+# If you want to inspect:
+# print(compare_diffs)
+
+# ----------------------------
+# Quick counts / map (optional)
+# ----------------------------
+# ggplot(aez) + geom_sf()
+# table(tagged$AEZ)
+```
