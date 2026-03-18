@@ -1,5 +1,5 @@
 # =====================================================
-# Run all code in the "build" subdir of cluster_deforestation_tag
+# Run all code in the "build" subdir of deforestation_tile_tag
 # =====================================================
 
 message("Starting build...")

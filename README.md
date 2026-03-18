@@ -1,6 +1,6 @@
 # cs3-biodiversity
 
-A research-oriented R project for building biodiversity indicators, clustering study sites, and linking those sites to deforestation patterns and agro-ecological zones (AEZs).
+This project downloads PREDICTS biodiversity data, calculates an overall biodiversity score (OV) for each site, spatially clusters study sites, and linking those sites to deforestation patterns and agro-ecological zones (AEZs). Regressions are then run to determine correlations between land-use change and OV score change at the AEZ level.
 
 ## Overview
 
