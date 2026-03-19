@@ -170,11 +170,17 @@ plot_list$global_map <- plot_global_map
 
 # -----------------------
 # Tagging rate by AEZ
-# exclude overall row for plotting
+# derive tagging rate from the compact AEZ summary
 # -----------------------
 
-cluster_tag_plot <- cluster_tag_summary %>%
-  filter(AEZ != "Overall")
+cluster_tag_plot <- aez_summary %>%
+  mutate(
+    pct_tagged_to_ha_tile = dplyr::if_else(
+      total_clusters > 0,
+      100 * clusters_tagged_to_ha_tile / total_clusters,
+      0
+    )
+  )
 
 plot_tagging_rate <- ggplot(
   cluster_tag_plot,
