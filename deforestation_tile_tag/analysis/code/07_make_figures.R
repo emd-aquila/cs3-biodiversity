@@ -29,7 +29,7 @@ change_type_colors <- c(
 # aka does OV increase or decrease?
 # -----------------------
 
-cluster_ov_change <- cluster_year_ov %>%
+cluster_ov_trend <- cluster_year_ov %>%
   arrange(AEZ, cluster_id, year) %>%
   group_by(AEZ, cluster_id) %>%
   summarise(
@@ -62,7 +62,7 @@ cluster_points <- cluster_sites %>%
 
 cluster_points <- cluster_points %>%
   left_join(
-    cluster_ov_change,
+    cluster_ov_trend,
     by = c("AEZ", "cluster_id")
   ) %>%
   left_join(
@@ -201,7 +201,7 @@ plot_list$tagging_rate <- plot_tagging_rate
 # OV direction counts
 # -----------------------
 
-ov_direction_counts <- cluster_ov_change %>%
+ov_direction_counts <- cluster_ov_trend %>%
   count(AEZ, ov_trend, name = "n_clusters")
 
 plot_ov_direction <- ggplot(
