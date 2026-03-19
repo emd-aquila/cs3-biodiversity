@@ -18,7 +18,7 @@ canonical_spatial_dir <- file.path(build_output_dir, "canonical_spatial")
 # External data locations
 defor_spatial_dir <- file.path("..", "..", "..", "spatial_data", "deforestation", "spatial")
 defor_tabular_dir <- file.path("..", "..", "..", "spatial_data", "deforestation", "tabular")
-cluster_dir <- file.path("..", "..", "..", "clustering", "output")
+cluster_dir <- file.path("..", "..", "..", "cluster", "output")
 
 # Ensure build directories exist
 dir.create(build_output_dir, recursive = TRUE, showWarnings = FALSE)
