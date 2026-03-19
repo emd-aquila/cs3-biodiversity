@@ -7,8 +7,8 @@
 # -----------------------
 
 write_csv_safe(
-  round_numeric_cols(cluster_pair_report, 2),
-  file.path(analysis_tables_dir, "cluster_pair_report.csv")
+  round_numeric_cols(cluster_deltas, 2),
+  file.path(analysis_tables_dir, "cluster_deltas.csv")
 )
 
 write_csv_safe(
@@ -17,18 +17,8 @@ write_csv_safe(
 )
 
 write_csv_safe(
-  round_numeric_cols(aez_transition_summary, 2),
-  file.path(analysis_tables_dir, "aez_transition_summary.csv")
-)
-
-write_csv_safe(
-  round_numeric_cols(clusters_tagged_ha_tile, 2),
-  file.path(analysis_tables_dir, "clusters_tagged_ha_tile.csv")
-)
-
-write_csv_safe(
-  round_numeric_cols(cluster_tag_summary, 2),
-  file.path(analysis_tables_dir, "cluster_tag_summary.csv")
+  round_numeric_cols(aez_summary, 2),
+  file.path(analysis_tables_dir, "aez_summary.csv")
 )
 
 # -----------------------
