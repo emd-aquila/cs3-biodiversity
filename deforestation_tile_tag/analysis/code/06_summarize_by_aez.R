@@ -46,11 +46,16 @@ pair_counts_by_aez <- cluster_year_pairs %>%
   )
 
 ha_pair_summary_by_aez <- cluster_deltas %>%
+  mutate(
+    aligned_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
+      ((delta_ov > 0 & delta_defor_ha > 0) |
+         (delta_ov < 0 & delta_defor_ha < 0))
+  ) %>%
   group_by(AEZ) %>%
   summarise(
     pairs_tagged_to_ha_tile = n(),
     n_inverse_change_ha_tag = sum(inverse_change, na.rm = TRUE),
-    n_aligned_change_ha_tag = sum(!inverse_change, na.rm = TRUE),
+    n_aligned_change_ha_tag = sum(aligned_change, na.rm = TRUE),
     .groups = "drop"
   )
 
