@@ -12,8 +12,8 @@ write_csv_safe(
 )
 
 write_csv_safe(
-  round_numeric_cols(cluster_ov_change, 2),
-  file.path(analysis_tables_dir, "cluster_ov_change.csv")
+  round_numeric_cols(cluster_ov_trend, 2),
+  file.path(analysis_tables_dir, "cluster_ov_trend.csv")
 )
 
 write_csv_safe(

@@ -4,8 +4,9 @@
 
 # -----------------------
 # One row per cluster-year pair with consecutive observations.
-# consecutive observations within a single cluster are of interest,
-# not between t1 and t3 if a cluster has 3+ years of data
+# 
+# Each cluster-year pair has consecutive observations within a single cluster,
+# not non-consecutive (i.e. t1 and t3) if a cluster has 3+ years of data.
 # -----------------------
 
 cluster_year_pairs <- cluster_year_ov %>%
