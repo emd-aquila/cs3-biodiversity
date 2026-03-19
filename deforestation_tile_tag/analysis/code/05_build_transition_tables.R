@@ -4,7 +4,7 @@
 
 # -----------------------
 # One row per cluster-year pair with consecutive observations.
-# consecutive observations within a single cluster are of interest, 
+# consecutive observations within a single cluster are of interest,
 # not between t1 and t3 if a cluster has 3+ years of data
 # -----------------------
 
@@ -39,7 +39,9 @@ cluster_year_pairs <- cluster_year_ov %>%
 cluster_buffer_meta <- cluster_buffer %>%
   st_drop_geometry() %>%
   distinct(
-    AEZ, cluster_id, buffer_km,
+    AEZ,
+    cluster_id,
+    buffer_km,
     n_sites,
     n_matched_tiles,
     n_matched_tiles_with_ha,
@@ -48,18 +50,35 @@ cluster_buffer_meta <- cluster_buffer %>%
     tagged_ha_tile
   )
 
+assert_has_cols(
+  cluster_buffer_meta,
+  c(
+    "AEZ", "cluster_id", "buffer_km",
+    "n_matched_tiles_with_ha", "tagged_ha_tile"
+  ),
+  "cluster_buffer_meta"
+)
+
 # -----------------------
-# Deforestation accumulated over each OV interval
-# annual deforestation is incremental, so interval change is the sum
-# from year_t1 through year_t2, inclusive
+# Restrict regression inputs early.
+# This avoids carrying non-ha-tagged clusters through the heavy interval join.
 # -----------------------
 
-interval_defor <- cluster_year_pairs %>%
-  left_join(
+cluster_pairs_tagged_ha <- cluster_year_pairs %>%
+  inner_join(
     cluster_buffer_meta %>%
-      select(AEZ, cluster_id, buffer_km),
+      filter(tagged_ha_tile, n_matched_tiles_with_ha > 0),
     by = c("AEZ", "cluster_id")
-  ) %>%
+  )
+
+# -----------------------
+# Deforestation accumulated over each OV interval.
+# Annual deforestation is incremental, so interval change is the sum
+# from year_t1 through year_t2, inclusive.
+# -----------------------
+
+interval_defor_tagged_ha <- cluster_pairs_tagged_ha %>%
+  select(AEZ, cluster_id, buffer_km, year_t1, year_t2) %>%
   left_join(
     cluster_buffer_year_defor,
     by = c("AEZ", "cluster_id", "buffer_km"),
@@ -70,34 +89,62 @@ interval_defor <- cluster_year_pairs %>%
   summarise(
     delta_defor_ha = sum(defor_total_ha_year, na.rm = TRUE),
     n_defor_years = n_distinct(year),
-    n_tiles_with_ha_mean = mean(n_tiles_with_ha, na.rm = TRUE),
+    n_defor_years_expected = first(year_t2 - year_t1 + 1L),
     .groups = "drop"
   )
 
-
 # -----------------------
-# Main report table
+# Regression-ready cluster-pair deltas.
+# One row per consecutive cluster-year pair with hectare-level tile coverage
+# and non-missing deforestation information over the OV interval.
 # -----------------------
 
-cluster_pair_report <- cluster_year_pairs %>%
+cluster_deltas <- cluster_pairs_tagged_ha %>%
   left_join(
-    cluster_buffer_meta,
-    by = c("AEZ", "cluster_id")
-  ) %>%
-  left_join(
-    interval_defor,
+    interval_defor_tagged_ha,
     by = c("AEZ", "cluster_id", "buffer_km", "year_t1", "year_t2")
   ) %>%
   mutate(
-    delta_defor_annualized = delta_defor_ha / (year_gap+1),
+    delta_defor_ha_annualized = dplyr::if_else(
+      !is.na(n_defor_years) & n_defor_years > 0,
+      delta_defor_ha / n_defor_years,
+      NA_real_
+    ),
     inverse_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
       ((delta_ov > 0 & delta_defor_ha < 0) |
-         (delta_ov < 0 & delta_defor_ha > 0)),
-    aligned_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
-      ((delta_ov > 0 & delta_defor_ha > 0) |
-         (delta_ov < 0 & delta_defor_ha < 0))
+         (delta_ov < 0 & delta_defor_ha > 0))
+  ) %>%
+  filter(!is.na(delta_defor_ha)) %>%
+  transmute(
+    AEZ,
+    cluster_id,
+    n_matched_tiles_with_ha,
+    year_t1,
+    year_t2,
+    year_gap,
+    ov_t1,
+    ov_t2,
+    delta_ov,
+    n_sites_t1,
+    n_sites_t2,
+    delta_defor_ha,
+    delta_defor_ha_annualized,
+    inverse_change
   ) %>%
   arrange(AEZ, cluster_id, year_t1, year_t2)
+
+assert_has_cols(
+  cluster_deltas,
+  c(
+    "AEZ", "cluster_id", "n_matched_tiles_with_ha",
+    "year_t1", "year_t2", "year_gap",
+    "ov_t1", "ov_t2", "delta_ov",
+    "n_sites_t1", "n_sites_t2",
+    "delta_defor_ha", "delta_defor_ha_annualized",
+    "inverse_change"
+  ),
+  "cluster_deltas"
+)
 
 # -----------------------
 # Cluster-year panel
@@ -134,23 +181,11 @@ cluster_tile_coverage <- cluster_buffer_tile %>%
 
 # -----------------------
 # Cluster subsets for tagging diagnostics
-# is the cluster tagged? how many to any tile? how many to a tile 
+# is the cluster tagged? how many to any tile? how many to a tile
 # with hectare-level data?
 # -----------------------
 
-cluster_tag_status <- cluster_buffer %>%
-  st_drop_geometry() %>%
-  distinct(
-    AEZ,
-    cluster_id,
-    buffer_km,
-    n_sites,
-    n_matched_tiles,
-    n_matched_tiles_with_ha,
-    n_matched_tiles_missing_ha,
-    tagged_any_tile,
-    tagged_ha_tile
-  ) %>%
+cluster_tag_status <- cluster_buffer_meta %>%
   arrange(AEZ, cluster_id)
 
 clusters_tagged_any_tile <- cluster_tag_status %>%
@@ -163,12 +198,11 @@ clusters_tagged_ha_tile <- cluster_tag_status %>%
 # Temporary outputs
 # -----------------------
 
-
 write_csv_safe(
-  cluster_year_panel,    
+  cluster_year_panel,
   file.path(analysis_tmp_dir, "cluster_year_panel.csv")
 )
-  
+
 write_csv_safe(
   cluster_tile_coverage,
   file.path(analysis_tmp_dir, "cluster_tile_coverage.csv")
