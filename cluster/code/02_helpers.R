@@ -252,8 +252,8 @@ get_method_spec <- function(method, radius_m) {
         sampsize = NULL,
         seed     = 1L
       ),
-      switch_n_threshold = NULL,
-      fallback_engine_fun = NULL,
+      switch_n_threshold = 2000L,
+      fallback_engine_fun = engine_greedy_cover,
       fallback_params = list(),
       export_params = list(
         method = "CLARA",

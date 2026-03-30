@@ -9,8 +9,8 @@
 # Base directories relative to code/
 code_dir <- "code"
 input_dir <- "input"
-output_dir <- "output1"
-tmp_dir <- "tmp1"
+output_dir <- "output"
+tmp_dir <- "tmp"
 
 # External project folders relative to cluster/
 predicts_out_dir <- file.path("..", "predicts_ov_table", "analysis", "output")

@@ -1,9 +1,30 @@
 ## =====================================================
-# Load canonical data from build pipeline
+# Load canonical data from build pipeline for the current cluster run
 # =====================================================
 
 # -----------------------
-# Paths
+# Preconditions
+# -----------------------
+
+required_objects <- c(
+  "canonical_tabular_dir",
+  "canonical_spatial_dir"
+)
+
+missing_objects <- required_objects[!vapply(required_objects, exists, logical(1))]
+
+if (length(missing_objects) > 0) {
+  stop(
+    paste0(
+      "03_load_canonical_data.R is missing required objects: ",
+      paste(missing_objects, collapse = ", ")
+    ),
+    call. = FALSE
+  )
+}
+
+# -----------------------
+# File paths for current cluster run
 # -----------------------
 
 cluster_year_ov_path <- file.path(canonical_tabular_dir, "cluster_year_ov.csv")
@@ -40,12 +61,8 @@ cluster_buffer <- read_sf(cluster_buffer_path)
 cluster_sites <- read_sf(cluster_sites_path)
 defor_tile_geometry <- read_sf(defor_tile_geometry_path)
 
-# testing
-names(defor_tile_geometry)
-table(defor_tile_geometry$has_ha_info, useNA = "ifany")
-
 # -----------------------
-# Validate the data read in has the expected columns
+# Validate required columns
 # -----------------------
 
 assert_has_cols(
@@ -74,27 +91,32 @@ assert_has_cols(
 
 assert_has_cols(
   cluster_buffer,
-  c("AEZ", "cluster_id", "buffer_km", "n_sites", "n_matched_tiles",
+  c(
+    "AEZ", "cluster_id", "buffer_km", "n_sites", "n_matched_tiles",
     "n_matched_tiles_with_ha", "n_matched_tiles_missing_ha",
-    "tagged_any_tile", "tagged_ha_tile"),
+    "tagged_any_tile", "tagged_ha_tile"
+  ),
   "cluster_buffer"
 )
 
 assert_has_cols(
   cluster_sites,
-  c("sample_id", "AEZ", "year", "cluster_id", "ov",
-    "latitude", "longitude", "method", "dist_to_medoid"),
+  c(
+    "sample_id", "AEZ", "year", "cluster_id", "ov",
+    "latitude", "longitude", "method", "dist_to_medoid"
+  ),
   "cluster_sites"
 )
 
 assert_has_cols(
   defor_tile_geometry,
-  c("tile_id", "has_ha_info", "geom"),
+  c("tile_id", "has_ha_info"),
   "defor_tile_geometry"
 )
 
+
 # -----------------------
-# Harmonize data types (AEZ order, as character/integer)
+# Harmonize types
 # -----------------------
 
 cluster_year_ov <- cluster_year_ov %>%
@@ -130,17 +152,43 @@ cluster_sites <- cluster_sites %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
-    year = as.integer(year),
+    year = as.integer(year)
   )
 
 cluster_buffer <- cluster_buffer %>%
-  dplyr::mutate(
+  mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
     buffer_km = as.numeric(buffer_km)
   )
 
-defor_tiles_all_sf <- defor_tile_geometry %>%
+defor_tile_geometry <- defor_tile_geometry %>%
   mutate(
+    tile_id = as.character(tile_id),
     has_ha_info = coalesce(has_ha_info, FALSE)
   )
+
+# -----------------------
+# Preserve full current-run objects
+# These are filtered by current_buffer_km in downstream scripts.
+# -----------------------
+
+cluster_buffer_all <- cluster_buffer
+cluster_buffer_tile_all <- cluster_buffer_tile
+cluster_buffer_year_defor_all <- cluster_buffer_year_defor
+defor_tiles_all_sf <- defor_tile_geometry
+
+# -----------------------
+# Build audit
+# -----------------------
+
+message("Loaded canonical data for current cluster run:")
+if (exists("current_cluster_stub")) {
+  message("  cluster run: ", current_cluster_stub)
+}
+message("  cluster_year_ov rows: ", nrow(cluster_year_ov))
+message("  cluster_buffer rows: ", nrow(cluster_buffer))
+message("  cluster_buffer_tile rows: ", nrow(cluster_buffer_tile))
+message("  cluster_buffer_year_defor rows: ", nrow(cluster_buffer_year_defor))
+message("  cluster_sites rows: ", nrow(cluster_sites))
+message("  defor_tile_geometry rows: ", nrow(defor_tile_geometry))

@@ -83,3 +83,40 @@ round_numeric_cols <- function(df, digits = 1) {
       )
     )
 }
+
+log_buffer_run <- function(buffer_km) {
+  message("\n==============================")
+  message("Running analysis for buffer_km = ", buffer_km)
+  message("==============================")
+}
+
+buffer_key <- function(buffer_km) {
+  paste0("buf_", buffer_km, "km")
+}
+
+log_cluster_run <- function(cluster_method, cluster_radius_km) {
+  message("\n======================================")
+  message(
+    "Running analysis for cluster config: ",
+    cluster_method,
+    " / ",
+    sprintf("%.1f", cluster_radius_km),
+    " km"
+  )
+  message("======================================")
+}
+
+assert_objects_exist <- function(object_names, script_name = "script") {
+  missing_objects <- object_names[!vapply(object_names, exists, logical(1))]
+  
+  if (length(missing_objects) > 0) {
+    stop(
+      paste0(
+        script_name,
+        " is missing required objects: ",
+        paste(missing_objects, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+}

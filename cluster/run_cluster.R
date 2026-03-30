@@ -18,15 +18,12 @@ message("Sourcing code/03_load_data.R")
 source(file.path("code", "03_load_data.R"))
 
 message("Sourcing code/04_run_clustering.R")
-source(file.path("code", "04_run_clustering.R"))
+source(file.path("code", "04_perform_clustering.R"))
 
-message("Sourcing code/05_evaluate_radius.R")
-source(file.path("code", "05_evaluate_radius.R"))
+message("Sourcing code/05_diagnostics.R")
+source(file.path("code", "05_diagnostics.R"))
 
-message("Sourcing code/06_diagnostics.R")
-source(file.path("code", "06_diagnostics.R"))
-
-message("Sourcing code/07_build_master_dataset.R")
-source(file.path("code", "07_build_master_dataset.R"))
+message("Sourcing code/06_build_master_dataset.R")
+source(file.path("code", "06_build_master_dataset.R"))
 
 message("Cluster build complete.")

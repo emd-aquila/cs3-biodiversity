@@ -1,18 +1,29 @@
 # =====================================================
-# Check buffer sensitivity
+# Check buffer sensitivity for the current cluster run
 # =====================================================
 
-# Goal:
-# Summarize whether increasing buffer size changes:
-# 1. number of clusters tagged to >=1 tile with ha data
-# 2. total number of cluster/tile tags
+required_objects <- c(
+  "cluster_buffer",
+  "cluster_buffer_tile",
+  "current_cluster_method",
+  "current_cluster_radius_km",
+  "current_cluster_stub"
+)
 
-# -----------------------
-# Cluster-level tagging summary by buffer
-# -----------------------
+missing_objects <- required_objects[!vapply(required_objects, exists, logical(1))]
+
+if (length(missing_objects) > 0) {
+  stop(
+    paste0(
+      "04_buffer_sensitivity_check.R is missing required objects: ",
+      paste(missing_objects, collapse = ", ")
+    ),
+    call. = FALSE
+  )
+}
 
 buffer_cluster_summary <- cluster_buffer %>%
-  st_drop_geometry() %>%
+  sf::st_drop_geometry() %>%
   distinct(
     AEZ,
     cluster_id,
@@ -35,10 +46,6 @@ buffer_cluster_summary <- cluster_buffer %>%
   ) %>%
   arrange(buffer_km)
 
-# -----------------------
-# Total cluster/tile tags by buffer
-# -----------------------
-
 buffer_tag_totals <- cluster_buffer_tile %>%
   distinct(AEZ, cluster_id, buffer_km, tile_id, has_ha_info) %>%
   group_by(buffer_km) %>%
@@ -49,45 +56,16 @@ buffer_tag_totals <- cluster_buffer_tile %>%
   ) %>%
   arrange(buffer_km)
 
-# -----------------------
-# Final compact report
-# -----------------------
-
-buffer_sensitivity_report <- buffer_cluster_summary %>%
+buffer_sensitivity_report_current <- buffer_cluster_summary %>%
   left_join(buffer_tag_totals, by = "buffer_km") %>%
+  mutate(
+    cluster_method = current_cluster_method,
+    cluster_radius_km = current_cluster_radius_km,
+    cluster_stub = current_cluster_stub,
+    .before = 1
+  ) %>%
   arrange(buffer_km)
 
-# -----------------------
-# Write report to tmp
-# -----------------------
-
-write_csv_safe(
-  buffer_sensitivity_report,
-  file.path(analysis_tmp_dir, "buffer_sensitivity_report.csv")
-)
-
-# -----------------------
-# Print to console
-# -----------------------
-
-message("Buffer sensitivity report:")
-print(buffer_sensitivity_report)
-
-
-# -----------------------
-# Decide the buffer to use based on results: 10km
-# 10km gets about 10 more clusters assigned to a tile with ha, and increases
-# tile assignment generally across the clusters already assigned 1+.
-# -----------------------
-target_buffer_km <- 10
-
-cluster_buffer <- cluster_buffer %>%
-  filter(buffer_km == target_buffer_km)
-
-cluster_buffer_tile <- cluster_buffer_tile %>%
-  filter(buffer_km == target_buffer_km)
-
-cluster_buffer_year_defor <- cluster_buffer_year_defor %>%
-  filter(buffer_km == target_buffer_km)
-
-message("Analysis restricted to buffer_km = ", target_buffer_km)
+message("Finished 04_buffer_sensitivity_check.R")
+message("  cluster run: ", current_cluster_stub)
+print(buffer_sensitivity_report_current)
