@@ -17,6 +17,7 @@ Thumbs.db
 
 # Ignore CSVs by default
 *.csv
+*.gpkg
 
 
 # Working directories
