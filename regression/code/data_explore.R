@@ -24,7 +24,7 @@ cluster_radius_km_target <- 12.5
 buffer_km_target <- 1
 defor_transform_target <- "raw"
 
-focus_aez_map <- 5
+focus_aez_map <- 9
 save_outputs <- TRUE
 
 # -----------------------
