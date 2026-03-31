@@ -44,7 +44,28 @@ sanitize_filename <- function(x) {
     stringr::str_replace_all("^_+|_+$", "")
 }
 
+normalize_cluster_deltas_schema <- function(df) {
+  rename_map <- c(
+    year_start = "year_t1",
+    year_final = "year_t2",
+    ov_start = "ov_t1",
+    ov_final = "ov_t2",
+    n_sites_start = "n_sites_t1",
+    n_sites_final = "n_sites_t2"
+  )
+
+  for (source_col in names(rename_map)) {
+    target_col <- rename_map[[source_col]]
+    if (source_col %in% names(df) && !target_col %in% names(df)) {
+      df[[target_col]] <- df[[source_col]]
+    }
+  }
+
+  df
+}
+
 coerce_cluster_deltas_types <- function(df) {
+  df <- normalize_cluster_deltas_schema(df)
   assert_has_cols(df, cluster_deltas_required_cols, "cluster_deltas")
   
   if (!"n_matched_tiles_with_ha" %in% names(df)) {
@@ -80,6 +101,7 @@ coerce_cluster_deltas_types <- function(df) {
 }
 
 build_regression_data <- function(cluster_deltas) {
+  cluster_deltas <- normalize_cluster_deltas_schema(cluster_deltas)
   assert_has_cols(cluster_deltas, cluster_deltas_required_cols, "cluster_deltas")
   
   cluster_deltas %>%

@@ -7,7 +7,8 @@
 # ------------------------------
 assert_exists(cluster_deltas_path)
 
-cluster_deltas_raw <- read_csv(cluster_deltas_path, show_col_types = FALSE)
+cluster_deltas_raw <- read_csv(cluster_deltas_path, show_col_types = FALSE) %>%
+  normalize_cluster_deltas_schema()
 
 assert_has_cols(
   cluster_deltas_raw,

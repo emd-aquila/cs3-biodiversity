@@ -2,16 +2,6 @@
 # Configuration for regression pipeline
 # =====================================================
 
-#TODO:
-# we need to track these things: buffer, clustering method, clustering radius, regression type, 
-# transformation of deltaDefor, 
-
-
-# subdivision = c("aez", "aez_canopy")
-# model_family = c("ols")
-
-
-
 # ------------------------------
 # Regression setting
 # ------------------------------
@@ -19,9 +9,12 @@
 # Minimum sample size required to run AEZ-specific regressions.
 min_observations_per_aez_regression <- 5
 
-# optional filter to only negative deltaOV values;
-# keep FALSE for the default baseline analysis.
+# optional filter; TRUE to only keep negative deltaOV, FALSE to include positive
 filter_neg_delta_ov <- TRUE
+
+# TRUE uses deforestation_tile_tag/analysis/output/whole_cluster.
+# FALSE uses deforestation_tile_tag/analysis/output/year_pair.
+use_whole_cluster <- FALSE
 
 # Current clustering scope for regression - add/remove as desired
 cluster_methods <- c("clara")                     # select from clara, pam, greedy_cover
@@ -61,7 +54,18 @@ code_dir <- file.path(regression_dir, "code")
 output_dir <- file.path(regression_dir, "output")
 tmp_dir <- file.path(regression_dir, "tmp")
 
-analysis_output_dir <- file.path(repo_root, "deforestation_tile_tag", "analysis", "output")
+
+analysis_output_subdir <- if (use_whole_cluster) {
+  file.path("output", "whole_cluster")
+} else {
+  file.path("output", "year_pair")
+}
+analysis_output_dir <- file.path(
+  repo_root,
+  "deforestation_tile_tag",
+  "analysis",
+  analysis_output_subdir
+)
 build_output_dir <- file.path(repo_root, "deforestation_tile_tag", "build", "output")
 
 # Create high-level regression directories

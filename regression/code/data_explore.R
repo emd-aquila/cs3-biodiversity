@@ -91,6 +91,7 @@ walk(
 )
 
 cluster_deltas_explore <- readr::read_csv(cluster_deltas_path, show_col_types = FALSE) %>%
+  normalize_cluster_deltas_schema() %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id)
