@@ -44,9 +44,18 @@ write_csv_safe(
   file.path(current_output_dirs$tables_dir, "cluster_deltas.csv")
 )
 
+# keep medoid_latitude and longitude as 4 digits
 write_csv_safe(
-  round_numeric_cols(cluster_ov_trend, 2),
-  file.path(current_output_dirs$tables_dir, "cluster_ov_trend.csv")
+  round_numeric_cols_except(
+    cluster_deltas,
+    digits = 2,
+    exclude = c("medoid_latitude", "medoid_longitude")
+  ) %>%
+    mutate(
+      medoid_latitude = round(medoid_latitude, 4),
+      medoid_longitude = round(medoid_longitude, 4)
+    ),
+  file.path(current_output_dirs$tables_dir, "cluster_deltas.csv")
 )
 
 write_csv_safe(

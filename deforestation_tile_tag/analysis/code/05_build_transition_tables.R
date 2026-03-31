@@ -22,7 +22,8 @@ required_objects <- c(
   "cluster_year_ov",
   "cluster_buffer_all",
   "cluster_buffer_tile_all",
-  "cluster_buffer_year_defor_all"
+  "cluster_buffer_year_defor_all",
+  "cluster_medoids"
 )
 
 missing_objects <- required_objects[!vapply(required_objects, exists, logical(1))]
@@ -50,6 +51,11 @@ log_buffer_run(current_buffer_km)
 # One row per consecutive cluster-year pair within a cluster.
 # This table is not buffer-dependent, but it is used downstream
 # after restricting to clusters tagged under the current buffer.
+# -----------------------
+
+# -----------------------
+# Cluster-year pairs
+# One row per consecutive cluster-year pair within a cluster.
 # -----------------------
 
 cluster_year_pairs <- cluster_year_ov %>%
@@ -129,7 +135,7 @@ if (nrow(cluster_buffer_this) == 0) {
   # -----------------------
   
   cluster_buffer_meta <- cluster_buffer_this %>%
-    sf::st_drop_geometry() %>%
+    st_drop_geometry() %>%
     distinct(
       AEZ,
       cluster_id,
@@ -191,6 +197,11 @@ if (nrow(cluster_buffer_this) == 0) {
       interval_defor_tagged_ha,
       by = c("AEZ", "cluster_id", "buffer_km", "year_t1", "year_t2")
     ) %>%
+    left_join(
+      cluster_medoids %>%
+        select(AEZ, cluster_id, medoid_latitude, medoid_longitude),
+      by = c("AEZ", "cluster_id")
+    ) %>%
     mutate(
       delta_defor_ha_annualized = dplyr::if_else(
         !is.na(n_defor_years) & n_defor_years > 0,
@@ -208,6 +219,8 @@ if (nrow(cluster_buffer_this) == 0) {
       AEZ,
       cluster_id,
       buffer_km,
+      medoid_latitude,
+      medoid_longitude,
       n_matched_tiles_with_ha,
       year_t1,
       year_t2,
@@ -227,7 +240,9 @@ if (nrow(cluster_buffer_this) == 0) {
   assert_has_cols(
     cluster_deltas,
     c(
-      "AEZ", "cluster_id", "buffer_km", "n_matched_tiles_with_ha",
+      "AEZ", "cluster_id", "buffer_km",
+      "medoid_latitude", "medoid_longitude",
+      "n_matched_tiles_with_ha",
       "year_t1", "year_t2", "year_gap",
       "ov_t1", "ov_t2", "delta_ov", "delta_ov_annualized",
       "n_sites_t1", "n_sites_t2",
@@ -302,10 +317,5 @@ if (nrow(cluster_buffer_this) == 0) {
     message("  cluster run: ", current_cluster_stub)
   }
   message("  buffer_km: ", current_buffer_km)
-  message("  cluster_year_pairs rows: ", nrow(cluster_year_pairs))
-  message("  cluster_pairs_tagged_ha rows: ", nrow(cluster_pairs_tagged_ha))
-  message("  interval_defor_tagged_ha rows: ", nrow(interval_defor_tagged_ha))
   message("  cluster_deltas rows: ", nrow(cluster_deltas))
-  message("  cluster_year_panel rows: ", nrow(cluster_year_panel))
-  message("  cluster_tile_coverage rows: ", nrow(cluster_tile_coverage))
 }

@@ -3,15 +3,8 @@
 # Fit raw OLS models and trimmed AEZ-specific variants, and save them
 # =====================================================
 
-# TODO:
-# create a folder pattern to differentiate between different approaches
-
-
-
-
-
 # -----------------------------------------------------
-# Basic sample checks
+# Preconditions
 # -----------------------------------------------------
 
 if (!exists("regression_data")) {
@@ -26,10 +19,30 @@ if (nrow(regression_data) == 0) {
   stop("regression_data has 0 rows after preprocessing.", call. = FALSE)
 }
 
+if (!exists("current_defor_transform")) {
+  stop("current_defor_transform is not defined. Run set_regression_run_paths(...) first.", call. = FALSE)
+}
+
+# -----------------------------------------------------
+# Choose regressor column for current run
+# -----------------------------------------------------
+
+regressor_col <- case_when(
+  current_defor_transform == "raw" ~ "delta_defor_ha",
+  current_defor_transform == "log1p" ~ "log1p_delta_defor_ha",
+  TRUE ~ NA_character_
+)
+
+if (is.na(regressor_col)) {
+  stop("Unknown current_defor_transform: ", current_defor_transform, call. = FALSE)
+}
+
 required_regression_cols <- c(
   "AEZ",
   "delta_ov",
-  "delta_defor_ha"
+  "delta_defor_ha",
+  "log1p_delta_defor_ha",
+  regressor_col
 )
 
 assert_has_cols(
@@ -40,23 +53,28 @@ assert_has_cols(
 
 message("Regression sample rows: ", nrow(regression_data))
 message("Unique AEZs in regression sample: ", n_distinct(regression_data$AEZ))
+message("Current deforestation transform: ", current_defor_transform)
+message("Regressor column: ", regressor_col)
 
-# -----------------------------------------------------
-# Baseline AEZ-specific raw OLS
-# Outcome: delta_ov
-# Regressor: delta_defor_ha
-# -----------------------------------------------------
+transform_label <- paste0("defor_", current_defor_transform)
+
+
+
+
+
+
+
 
 aez_counts_raw <- regression_data %>%
   filter(
     !is.na(AEZ),
-    !is.na(delta_defor_ha),
+    !is.na(.data[[regressor_col]]),
     !is.na(delta_ov)
   ) %>%
   group_by(AEZ) %>%
   summarise(
     n_obs = n(),
-    n_unique_delta_defor_ha = n_distinct(delta_defor_ha),
+    n_unique_regressor = n_distinct(.data[[regressor_col]]),
     .groups = "drop"
   ) %>%
   arrange(AEZ)
@@ -64,7 +82,7 @@ aez_counts_raw <- regression_data %>%
 eligible_aez_raw <- aez_counts_raw %>%
   filter(
     n_obs >= min_observations_per_aez_regression,
-    n_unique_delta_defor_ha >= 2
+    n_unique_regressor >= 2
   ) %>%
   pull(AEZ) %>%
   as.character()
@@ -72,12 +90,12 @@ eligible_aez_raw <- aez_counts_raw %>%
 regression_data_aez_raw <- regression_data %>%
   filter(
     as.character(AEZ) %in% eligible_aez_raw,
-    !is.na(delta_defor_ha),
+    !is.na(.data[[regressor_col]]),
     !is.na(delta_ov)
   )
 
 message(
-  "AEZs meeting minimum observation threshold for raw OLS (",
+  "AEZs meeting minimum observation threshold for baseline OLS (",
   min_observations_per_aez_regression,
   "): ",
   length(eligible_aez_raw)
@@ -87,15 +105,16 @@ if (length(eligible_aez_raw) == 0) {
   warning(
     "No AEZ has at least min_observations_per_aez_regression = ",
     min_observations_per_aez_regression,
-    ". Skipping AEZ-specific raw OLS."
+    ". Skipping AEZ-specific baseline OLS."
   )
   models_aez_raw_ols <- list()
 } else {
-  models_aez_raw_ols <- fit_ols_by_aez(regression_data_aez_raw)
+  models_aez_raw_ols <- fit_ols_by_aez_current(regression_data_aez_raw, regressor_col)
 }
 
 # -----------------------------------------------------
-# AEZ-specific raw OLS after within-AEZ IQR trimming
+# AEZ-specific OLS after within-AEZ IQR trimming
+# Trimming is performed on raw delta_defor_ha.
 # -----------------------------------------------------
 
 regression_data_iqr_trimmed_aez <- regression_data %>%
@@ -120,10 +139,14 @@ regression_data_iqr_trimmed_aez <- regression_data %>%
   select(-q1_defor, -q3_defor, -iqr_defor, -lower_defor, -upper_defor)
 
 aez_counts_iqr_trimmed <- regression_data_iqr_trimmed_aez %>%
+  filter(
+    !is.na(.data[[regressor_col]]),
+    !is.na(delta_ov)
+  ) %>%
   group_by(AEZ) %>%
   summarise(
     n_obs = n(),
-    n_unique_delta_defor_ha = n_distinct(delta_defor_ha),
+    n_unique_regressor = n_distinct(.data[[regressor_col]]),
     .groups = "drop"
   ) %>%
   arrange(AEZ)
@@ -131,13 +154,17 @@ aez_counts_iqr_trimmed <- regression_data_iqr_trimmed_aez %>%
 eligible_aez_iqr_trimmed <- aez_counts_iqr_trimmed %>%
   filter(
     n_obs >= min_observations_per_aez_regression,
-    n_unique_delta_defor_ha >= 2
+    n_unique_regressor >= 2
   ) %>%
   pull(AEZ) %>%
   as.character()
 
 regression_data_aez_iqr_trimmed <- regression_data_iqr_trimmed_aez %>%
-  filter(as.character(AEZ) %in% eligible_aez_iqr_trimmed)
+  filter(
+    as.character(AEZ) %in% eligible_aez_iqr_trimmed,
+    !is.na(.data[[regressor_col]]),
+    !is.na(delta_ov)
+  )
 
 message(
   "AEZs meeting minimum observation threshold after within-AEZ IQR trimming (",
@@ -154,13 +181,15 @@ if (length(eligible_aez_iqr_trimmed) == 0) {
   )
   models_aez_iqr_trimmed_ols <- list()
 } else {
-  models_aez_iqr_trimmed_ols <- fit_ols_by_aez(regression_data_aez_iqr_trimmed)
+  models_aez_iqr_trimmed_ols <- fit_ols_by_aez_current(
+    regression_data_aez_iqr_trimmed,
+    regressor_col
+  )
 }
 
 # -----------------------------------------------------
-# AEZ-specific raw OLS after within-AEZ top-5% trimming
-# Removes observations above the 95th percentile of
-# delta_defor_ha within each AEZ
+# AEZ-specific OLS after within-AEZ top-5% trimming
+# Trimming is performed on raw delta_defor_ha.
 # -----------------------------------------------------
 
 regression_data_top5_trimmed_aez <- regression_data %>%
@@ -178,10 +207,14 @@ regression_data_top5_trimmed_aez <- regression_data %>%
   select(-p95_defor)
 
 aez_counts_top5_trimmed <- regression_data_top5_trimmed_aez %>%
+  filter(
+    !is.na(.data[[regressor_col]]),
+    !is.na(delta_ov)
+  ) %>%
   group_by(AEZ) %>%
   summarise(
     n_obs = n(),
-    n_unique_delta_defor_ha = n_distinct(delta_defor_ha),
+    n_unique_regressor = n_distinct(.data[[regressor_col]]),
     .groups = "drop"
   ) %>%
   arrange(AEZ)
@@ -189,13 +222,17 @@ aez_counts_top5_trimmed <- regression_data_top5_trimmed_aez %>%
 eligible_aez_top5_trimmed <- aez_counts_top5_trimmed %>%
   filter(
     n_obs >= min_observations_per_aez_regression,
-    n_unique_delta_defor_ha >= 2
+    n_unique_regressor >= 2
   ) %>%
   pull(AEZ) %>%
   as.character()
 
 regression_data_aez_top5_trimmed <- regression_data_top5_trimmed_aez %>%
-  filter(as.character(AEZ) %in% eligible_aez_top5_trimmed)
+  filter(
+    as.character(AEZ) %in% eligible_aez_top5_trimmed,
+    !is.na(.data[[regressor_col]]),
+    !is.na(delta_ov)
+  )
 
 message(
   "AEZs meeting minimum observation threshold after within-AEZ top-5% trimming (",
@@ -212,7 +249,10 @@ if (length(eligible_aez_top5_trimmed) == 0) {
   )
   models_aez_top5_trimmed_ols <- list()
 } else {
-  models_aez_top5_trimmed_ols <- fit_ols_by_aez(regression_data_aez_top5_trimmed)
+  models_aez_top5_trimmed_ols <- fit_ols_by_aez_current(
+    regression_data_aez_top5_trimmed,
+    regressor_col
+  )
 }
 
 # -----------------------------------------------------
@@ -221,44 +261,47 @@ if (length(eligible_aez_top5_trimmed) == 0) {
 
 save_model_rds(
   models_aez_raw_ols,
-  file.path(models_dir, "models_aez_raw_ols.rds")
+  file.path(models_dir, paste0("models_aez_raw_ols__", transform_label, ".rds"))
 )
 
 save_model_rds(
   models_aez_iqr_trimmed_ols,
-  file.path(models_dir, "models_aez_iqr_trimmed_ols.rds")
+  file.path(models_dir, paste0("models_aez_iqr_trimmed_ols__", transform_label, ".rds"))
 )
 
 save_model_rds(
   models_aez_top5_trimmed_ols,
-  file.path(models_dir, "models_aez_top5_trimmed_ols.rds")
+  file.path(models_dir, paste0("models_aez_top5_trimmed_ols__", transform_label, ".rds"))
 )
 
-# ------------------------------
+# -----------------------------------------------------
 # Export regression tables
-# ------------------------------
+# -----------------------------------------------------
+
 if (length(models_aez_raw_ols) > 0) {
   save_modelsummary_table(
     models_aez_raw_ols,
-    path = file.path(tables_dir, "table_aez_raw_ols.html"),
-    title = "AEZ-Specific Raw OLS: Delta OV on Delta Deforestation"
+    path = file.path(tables_dir, paste0("table_aez_raw_ols__", transform_label, ".html")),
+    title = paste0("AEZ-Specific OLS: Delta OV on ", regressor_col)
   )
 }
 
 if (length(models_aez_iqr_trimmed_ols) > 0) {
   save_modelsummary_table(
     models_aez_iqr_trimmed_ols,
-    path = file.path(tables_dir, "table_aez_iqr_trimmed_ols.html"),
-    title = "AEZ-Specific Raw OLS after Within-AEZ IQR Trimming"
+    path = file.path(tables_dir, paste0("table_aez_iqr_trimmed_ols__", transform_label, ".html")),
+    title = paste0("AEZ-Specific OLS after Within-AEZ IQR Trimming: ", regressor_col)
   )
 }
 
 if (length(models_aez_top5_trimmed_ols) > 0) {
   save_modelsummary_table(
     models_aez_top5_trimmed_ols,
-    path = file.path(tables_dir, "table_aez_top5_trimmed_ols.html"),
-    title = "AEZ-Specific Raw OLS after Within-AEZ Top-5% Trimming"
+    path = file.path(tables_dir, paste0("table_aez_top5_trimmed_ols__", transform_label, ".html")),
+    title = paste0("AEZ-Specific OLS after Within-AEZ Top-5% Trimming: ", regressor_col)
   )
 }
 
 message("Finished 04_ols_regression.R")
+message("  current run: ", current_run_stub)
+message("  regressor column: ", regressor_col)

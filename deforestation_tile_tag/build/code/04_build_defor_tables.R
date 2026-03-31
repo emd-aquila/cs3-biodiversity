@@ -6,7 +6,7 @@
 #   - defor_tile_geometry   : spatial tile layer for matching
 # =====================================================
 
-sf::sf_use_s2(FALSE)
+sf_use_s2(FALSE)
 
 # -----------------------
 # Canonical tile attribute table

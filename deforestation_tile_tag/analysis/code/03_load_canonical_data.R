@@ -152,7 +152,10 @@ cluster_sites <- cluster_sites %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
-    year = as.integer(year)
+    year = as.integer(year),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    dist_to_medoid = as.numeric(dist_to_medoid)
   )
 
 cluster_buffer <- cluster_buffer %>%
@@ -162,21 +165,44 @@ cluster_buffer <- cluster_buffer %>%
     buffer_km = as.numeric(buffer_km)
   )
 
-defor_tile_geometry <- defor_tile_geometry %>%
+defor_tiles_all_sf <- defor_tile_geometry %>%
   mutate(
-    tile_id = as.character(tile_id),
     has_ha_info = coalesce(has_ha_info, FALSE)
   )
 
 # -----------------------
-# Preserve full current-run objects
-# These are filtered by current_buffer_km in downstream scripts.
+# Derive one medoid row per AEZ-cluster
+#
+# cluster_sites is sample-level, so the same medoid site may appear
+# in multiple years/observations, so need to deduplicate first, then take the row
+# with minimum dist_to_medoid within each AEZ-cluster.
+# -----------------------
+
+cluster_medoids <- cluster_sites %>%
+  st_drop_geometry() %>%
+  select(AEZ, cluster_id, latitude, longitude, dist_to_medoid) %>%
+  distinct() %>%
+  group_by(AEZ, cluster_id) %>%
+  slice_min(dist_to_medoid, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(
+    medoid_latitude = latitude,
+    medoid_longitude = longitude
+  )
+
+assert_has_cols(
+  cluster_medoids,
+  c("AEZ", "cluster_id", "medoid_latitude", "medoid_longitude", "dist_to_medoid"),
+  "cluster_medoids"
+)
+
+# -----------------------
+# Preserve full multi-buffer objects for per-buffer analysis loop
 # -----------------------
 
 cluster_buffer_all <- cluster_buffer
 cluster_buffer_tile_all <- cluster_buffer_tile
 cluster_buffer_year_defor_all <- cluster_buffer_year_defor
-defor_tiles_all_sf <- defor_tile_geometry
 
 # -----------------------
 # Build audit
@@ -191,4 +217,5 @@ message("  cluster_buffer rows: ", nrow(cluster_buffer))
 message("  cluster_buffer_tile rows: ", nrow(cluster_buffer_tile))
 message("  cluster_buffer_year_defor rows: ", nrow(cluster_buffer_year_defor))
 message("  cluster_sites rows: ", nrow(cluster_sites))
+message("  cluster_medoids rows: ", nrow(cluster_medoids))
 message("  defor_tile_geometry rows: ", nrow(defor_tile_geometry))

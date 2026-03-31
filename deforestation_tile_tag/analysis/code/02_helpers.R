@@ -84,6 +84,16 @@ round_numeric_cols <- function(df, digits = 1) {
     )
 }
 
+round_numeric_cols_except <- function(df, digits = 1, exclude = character()) {
+  df %>%
+    mutate(
+      across(
+        where(is.numeric) & !any_of(exclude),
+        ~ round(.x, digits)
+      )
+    )
+}
+
 log_buffer_run <- function(buffer_km) {
   message("\n==============================")
   message("Running analysis for buffer_km = ", buffer_km)

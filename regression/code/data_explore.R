@@ -1,62 +1,68 @@
 # =====================================================
 # data_explore.R
-# Exploratory plots for cluster_deltas outputs from deforestation_tile_tag
+# Exploratory plots for one selected regression run
 # =====================================================
 
-library(tidyverse)
-library(sf)
-library(here)
-library(scales)
+message("Starting data exploration...")
+message("Working directory: ", getwd())
+
+message("Sourcing 00_libraries.R")
+source("00_libraries.R")
+
+message("Sourcing 01_config.R")
+source("01_config.R")
+
+message("Sourcing 02_helpers.R")
+source("02_helpers.R")
 
 # -----------------------
 # User settings
 # -----------------------
 
-buffer_km_target <- 10
-focus_aez_number <- 5
+cluster_method_target <- "clara"
+cluster_radius_km_target <- 12.5
+buffer_km_target <- 1
+defor_transform_target <- "raw"
+
+focus_aez_map <- 5
 save_outputs <- TRUE
 
 # -----------------------
-# Paths
-# Assumes working directory is regression/code/
+# Set current run paths
 # -----------------------
 
-repo_root <- file.path("..", "..")
-defor_tag_dir <- file.path(repo_root, "deforestation_tile_tag")
+set_regression_run_paths(
+  cluster_method = cluster_method_target,
+  cluster_radius_km = cluster_radius_km_target,
+  buffer_km = buffer_km_target,
+  defor_transform = defor_transform_target
+)
 
-analysis_output_dir <- file.path(defor_tag_dir, "analysis", "output")
-buffer_dir <- file.path(analysis_output_dir, paste0("buf_", buffer_km_target, "km"))
-analysis_tables_dir <- file.path(buffer_dir, "tables")
+message("Sourcing 03_load_data.R")
+source("03_load_data.R")
 
-build_output_dir <- file.path(defor_tag_dir, "build", "output")
-canonical_tabular_dir <- file.path(build_output_dir, "canonical_tabular")
-canonical_spatial_dir <- file.path(build_output_dir, "canonical_spatial")
+# -----------------------
+# Build canonical paths for current cluster run
+# -----------------------
 
-aez_path <- file.path(repo_root, "spatial_data", "aez", "AEZ_shp_file.shp")
-
-cluster_deltas_path <- file.path(analysis_tables_dir, "cluster_deltas.csv")
 cluster_sites_path <- file.path(canonical_spatial_dir, "cluster_sites.gpkg")
 defor_tile_geometry_path <- file.path(canonical_spatial_dir, "defor_tile_geometry.gpkg")
 cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "cluster_buffer_tile.csv")
+aez_path <- file.path(repo_root, "spatial_data", "aez", "AEZ_shp_file.shp")
 
-explore_output_dir <- file.path(repo_root, "regression", "output", "data_explore", paste0("buf_", buffer_km_target, "km"))
+explore_output_dir <- file.path(
+  "..",
+  "data_explore",
+  current_buffer_stub,
+  current_cluster_stub,
+  paste0("defor_", current_defor_transform)
+)
+
 dir.create(explore_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # -----------------------
 # Helpers
 # -----------------------
-
-assert_exists <- function(path) {
-  if (!file.exists(path)) {
-    stop("Missing required file: ", path, call. = FALSE)
-  }
-}
-
-standardize_aez_order <- function(x) {
-  x_chr <- as.character(x)
-  x_num <- readr::parse_number(x_chr)
-  factor(x_chr, levels = unique(x_chr[order(x_num, x_chr)]))
-}
 
 is_focus_aez <- function(x, focus_aez_number) {
   readr::parse_number(as.character(x)) == focus_aez_number
@@ -71,6 +77,7 @@ save_plot_if_requested <- function(plot_obj, filename, width = 11, height = 8, d
       height = height,
       dpi = dpi
     )
+    message("Wrote: ", file.path(explore_output_dir, filename))
   }
 }
 
@@ -83,7 +90,7 @@ walk(
   assert_exists
 )
 
-cluster_deltas <- readr::read_csv(cluster_deltas_path, show_col_types = FALSE) %>%
+cluster_deltas_explore <- readr::read_csv(cluster_deltas_path, show_col_types = FALSE) %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id)
@@ -106,14 +113,37 @@ cluster_buffer_tile <- readr::read_csv(cluster_buffer_tile_path, show_col_types 
   )
 
 aez_sf <- sf::read_sf(aez_path) %>%
-  mutate(AEZ = standardize_aez_order(AEZ))
+  mutate(
+    AEZ = standardize_aez_order(AEZ)
+  )
+
+# -----------------------
+# Choose x-axis variable for scatterplots
+# -----------------------
+
+x_col <- dplyr::case_when(
+  current_defor_transform == "raw" ~ "delta_defor_ha",
+  current_defor_transform == "log1p" ~ "log1p_delta_defor_ha",
+  TRUE ~ NA_character_
+)
+
+if (is.na(x_col)) {
+  stop("Unknown current_defor_transform: ", current_defor_transform, call. = FALSE)
+}
+
+if (!"log1p_delta_defor_ha" %in% names(cluster_deltas_explore)) {
+  cluster_deltas_explore <- cluster_deltas_explore %>%
+    mutate(
+      log1p_delta_defor_ha = log1p(delta_defor_ha)
+    )
+}
 
 # -----------------------
 # 1) AEZ5 clusters + tiles map
 # -----------------------
 
-cluster_summary_focus_aez <- cluster_deltas %>%
-  filter(is_focus_aez(AEZ, focus_aez_number)) %>%
+cluster_summary_focus_aez <- cluster_deltas_explore %>%
+  filter(is_focus_aez(AEZ, focus_aez_map)) %>%
   group_by(AEZ, cluster_id) %>%
   summarise(
     n_pairs = n(),
@@ -132,7 +162,7 @@ cluster_summary_focus_aez <- cluster_deltas %>%
   )
 
 focus_cluster_points <- cluster_sites %>%
-  filter(is_focus_aez(AEZ, focus_aez_number)) %>%
+  filter(is_focus_aez(AEZ, focus_aez_map)) %>%
   arrange(AEZ, cluster_id, dist_to_medoid) %>%
   group_by(AEZ, cluster_id) %>%
   slice(1) %>%
@@ -143,7 +173,7 @@ focus_cluster_points <- cluster_sites %>%
 focus_tile_ids <- cluster_buffer_tile %>%
   filter(
     buffer_km == buffer_km_target,
-    is_focus_aez(AEZ, focus_aez_number),
+    is_focus_aez(AEZ, focus_aez_map),
     cluster_id %in% focus_cluster_points$cluster_id
   ) %>%
   distinct(tile_id)
@@ -152,23 +182,45 @@ focus_tiles_sf <- defor_tile_geometry %>%
   semi_join(focus_tile_ids, by = "tile_id")
 
 focus_aez_sf <- aez_sf %>%
-  filter(is_focus_aez(AEZ, focus_aez_number))
+  filter(is_focus_aez(AEZ, focus_aez_map))
 
-target_crs <- st_crs(focus_cluster_points)
-if (st_crs(focus_aez_sf) != target_crs) {
-  focus_aez_sf <- st_transform(focus_aez_sf, target_crs)
-}
-if (st_crs(focus_tiles_sf) != target_crs) {
-  focus_tiles_sf <- st_transform(focus_tiles_sf, target_crs)
+target_crs <- sf::st_crs(focus_cluster_points)
+
+if (sf::st_crs(focus_aez_sf) != target_crs) {
+  focus_aez_sf <- sf::st_transform(focus_aez_sf, target_crs)
 }
 
-plot_aez_focus_clusters_tiles <- ggplot() +
-  geom_sf(data = focus_aez_sf, fill = NA, color = "grey35", linewidth = 0.4) +
-  geom_sf(data = focus_tiles_sf, fill = "grey70", color = NA, alpha = 0.35) +
+if (sf::st_crs(focus_tiles_sf) != target_crs) {
+  focus_tiles_sf <- sf::st_transform(focus_tiles_sf, target_crs)
+}
+
+## PLOTTING WORLD MAP
+world_map <- map_data("world")
+
+focus_cluster_points <- st_transform(focus_cluster_points, 4326)
+focus_tiles_sf <- st_transform(focus_tiles_sf, 4326)
+focus_aez_sf <- st_transform(focus_aez_sf, 4326)  
+
+plot_aez5_clusters_tiles <- ggplot() +
+  geom_polygon(
+    data = world_map,
+    aes(x = long, y = lat, group = group),
+    fill = "grey95",
+    color = "grey60",
+    linewidth = 0.2
+  ) +
+  geom_sf(
+    data = focus_tiles_sf,
+    fill = "grey70",
+    color = NA,
+    alpha = 0.35,
+    inherit.aes = FALSE
+  ) +
   geom_sf(
     data = focus_cluster_points,
     aes(color = mean_delta_ov, size = n_pairs),
-    alpha = 0.95
+    alpha = 0.95,
+    inherit.aes = FALSE
   ) +
   scale_color_gradient2(
     low = "firebrick3",
@@ -179,29 +231,47 @@ plot_aez_focus_clusters_tiles <- ggplot() +
   ) +
   scale_size_continuous(name = "N pairs") +
   labs(
-    title = paste0("AEZ", focus_aez_number, ": clusters and matched tiles"),
-    subtitle = paste0("Buffer = ", buffer_km_target, " km; points colored by mean cluster-level delta OV"),
+    title = paste0("AEZ", focus_aez_map, ": clusters and matched tiles"),
+    subtitle = paste0(
+      "Method = ", current_cluster_method,
+      " | Radius = ", sprintf("%.1f", current_cluster_radius_km), " km",
+      " | Buffer = ", buffer_km_target, " km"
+    ),
     x = NULL,
     y = NULL
   ) +
+  coord_sf(
+    xlim = c(-180, 180),
+    ylim = c(-30, 30),
+    expand = FALSE
+  ) +
   theme_minimal()
 
-print(plot_aez_focus_clusters_tiles)
-save_plot_if_requested(plot_aez_focus_clusters_tiles, paste0("aez", focus_aez_number, "_clusters_tiles.png"), width = 10, height = 8)
+print(plot_aez5_clusters_tiles)
 
-if (isTRUE(save_outputs)) {
-  readr::write_csv(
-    st_drop_geometry(focus_cluster_points) %>% arrange(desc(mean_delta_ov)),
-    file.path(explore_output_dir, paste0("aez", focus_aez_number, "_cluster_summary.csv"))
-  )
-}
+save_plot_if_requested(
+  plot_aez5_clusters_tiles,
+  paste0("aez", focus_aez_map, "_clusters_tiles.png"),
+  width = 10,
+  height = 8
+)
+
+readr::write_csv(
+  sf::st_drop_geometry(focus_cluster_points) %>%
+    arrange(desc(mean_delta_ov)),
+  file.path(explore_output_dir, paste0("aez", focus_aez_map, "_cluster_summary.csv"))
+)
 
 # -----------------------
-# 2) Separate AEZ regression plots colored by cluster_id
+# 2) AEZ-specific regression plots colored by cluster_id
 # -----------------------
 
-regression_plot_data <- cluster_deltas %>%
-  filter(!is.na(AEZ), !is.na(delta_defor_ha), !is.na(delta_ov)) %>%
+regression_plot_data <- cluster_deltas_explore %>%
+  filter(
+    !is.na(AEZ),
+    !is.na(.data[[x_col]]),
+    !is.na(delta_ov)
+  ) %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id)
@@ -223,12 +293,19 @@ for (aez_value in aez_values_to_plot) {
   
   plot_regression_single_aez_colored_cluster <- ggplot(
     regression_plot_data_aez,
-    aes(x = delta_defor_ha, y = delta_ov, color = cluster_id)
+    aes(
+      x = .data[[x_col]],
+      y = delta_ov,
+      color = cluster_id
+    )
   ) +
     geom_point(alpha = 0.85, size = 2.1) +
     geom_smooth(
       data = regression_plot_data_aez,
-      mapping = aes(x = delta_defor_ha, y = delta_ov),
+      mapping = aes(
+        x = .data[[x_col]],
+        y = delta_ov
+      ),
       method = "lm",
       se = FALSE,
       color = "black",
@@ -236,10 +313,15 @@ for (aez_value in aez_values_to_plot) {
       inherit.aes = FALSE
     ) +
     labs(
-      title = paste0("AEZ ", aez_value, ": delta OV vs delta deforestation"),
-      subtitle = paste0("Buffer = ", buffer_km_target, " km; colors identify cluster_id; black line = AEZ-level OLS"),
-      x = "Delta deforestation (ha)",
-      y = "Delta OV",
+      title = paste0("AEZ ", aez_value, ": delta OV vs deforestation"),
+      subtitle = paste0(
+        "Method = ", current_cluster_method,
+        " | Radius = ", sprintf("%.1f", current_cluster_radius_km), " km",
+        " | Buffer = ", buffer_km_target, " km",
+        " | Transform = ", current_defor_transform
+      ),
+      x = x_col,
+      y = "delta_ov",
       color = "Cluster ID"
     ) +
     theme_minimal() +
@@ -260,3 +342,4 @@ for (aez_value in aez_values_to_plot) {
 }
 
 message("Finished data_explore.R")
+message("  output dir: ", explore_output_dir)

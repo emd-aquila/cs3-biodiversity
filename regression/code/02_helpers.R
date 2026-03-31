@@ -51,6 +51,14 @@ coerce_cluster_deltas_types <- function(df) {
     df$n_matched_tiles_with_ha <- NA_real_
   }
   
+  if (!"medoid_latitude" %in% names(df)) {
+    df$medoid_latitude <- NA_real_
+  }
+  
+  if (!"medoid_longitude" %in% names(df)) {
+    df$medoid_longitude <- NA_real_
+  }
+  
   df %>%
     mutate(
       AEZ = as.character(AEZ),
@@ -65,8 +73,10 @@ coerce_cluster_deltas_types <- function(df) {
       n_sites_t2 = as.numeric(n_sites_t2),
       delta_defor_ha = as.numeric(delta_defor_ha),
       delta_defor_ha_annualized = as.numeric(delta_defor_ha_annualized),
-      n_matched_tiles_with_ha = as.numeric(n_matched_tiles_with_ha)
-      )
+      n_matched_tiles_with_ha = as.numeric(n_matched_tiles_with_ha),
+      medoid_latitude = as.numeric(medoid_latitude),
+      medoid_longitude = as.numeric(medoid_longitude)
+    )
 }
 
 build_regression_data <- function(cluster_deltas) {
@@ -83,25 +93,18 @@ build_regression_data <- function(cluster_deltas) {
       ),
       mean_n_sites = (n_sites_t1 + n_sites_t2) / 2
     ) %>%
-    arrange(AEZ, cluster_id, year_t1, year_t2, 
-            ov_t1, ov_t2, delta_ov, delta_defor_ha, 
-            delta_defor_ha_annualized, inverse_change, 
-            n_sites_t1, n_sites_t2, n_matched_tiles_with_ha)
+    arrange(
+      AEZ, cluster_id, year_t1, year_t2,
+      ov_t1, ov_t2, delta_ov, delta_defor_ha,
+      delta_defor_ha_annualized, inverse_change,
+      n_sites_t1, n_sites_t2, n_matched_tiles_with_ha,
+      medoid_latitude, medoid_longitude
+    )
 }
 
-fit_ols <- function(data) {
-  required_cols <- c("delta_ov", "delta_defor_ha")
-  assert_has_cols(data, required_cols, "data")
-  
-  feols(
-    delta_ov ~ delta_defor_ha,
-    data = data
-  )
-}
 
-fit_ols_by_aez <- function(data) {
-  required_cols <- c("AEZ", "delta_ov", "delta_defor_ha")
-  assert_has_cols(data, required_cols, "data")
+fit_ols_by_aez_current <- function(data, regressor_col) {
+  assert_has_cols(data, c("AEZ", "delta_ov", regressor_col), "data")
   
   data_split <- data %>%
     group_by(AEZ) %>%
@@ -113,9 +116,13 @@ fit_ols_by_aez <- function(data) {
     pull(AEZ) %>%
     as.character()
   
+  model_formula <- stats::as.formula(
+    paste("delta_ov ~", regressor_col)
+  )
+  
   map(
-    set_names(data_split, aez_names),
-    ~ feols(delta_ov ~ delta_defor_ha, data = .x)
+    rlang::set_names(data_split, aez_names),
+    ~ feols(model_formula, data = .x)
   )
 }
 

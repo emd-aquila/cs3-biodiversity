@@ -13,7 +13,9 @@ if (!file.exists(cluster_file_path)) {
   )
 }
 
-cluster_raw <- readr::read_csv(
+# This reads the METHOD_rad_RADIUSkm_model_df_clustered.csv specified in the current loop
+# iteration in run_build.R
+cluster_raw <- read_csv(
   cluster_file_path,
   show_col_types = FALSE
 )
