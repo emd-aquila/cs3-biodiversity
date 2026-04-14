@@ -26,11 +26,14 @@ assert_has_cols(
 
 assert_has_cols(
   defor_tabular_raw,
-  c("id", "lossyear_mode", "total_deforested_ha"),
+  c("id", "lossyear_mode", 
+    "total_deforested_ha", 
+    "total_deforested_ha_crops", 
+    "total_deforested_ha_livestock"
+    ),
   "defor_tabular_raw"
 )
 
-message("Loaded raw inputs:")
+message("Loaded raw deforestation inputs:")
 message("  defor_spatial_raw rows: ", nrow(defor_spatial_raw))
 message("  defor_tabular_raw rows: ", nrow(defor_tabular_raw))
-message("  cluster_raw rows: ", nrow(cluster_raw))

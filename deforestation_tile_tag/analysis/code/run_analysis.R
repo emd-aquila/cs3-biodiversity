@@ -18,7 +18,7 @@ for (analysis_mode in analysis_modes_to_run) {
   set_analysis_mode_paths(analysis_mode)
 
   message("\n######################################")
-  message("Running analysis workflow: ", current_analysis_mode)
+  message("Running analysis workflow: ", current_ov_approach)
   message("Output root: ", analysis_output_dir)
   message("Temp root: ", analysis_tmp_dir)
   message("######################################")
@@ -39,7 +39,7 @@ for (analysis_mode in analysis_modes_to_run) {
       " km"
     )
     message("Cluster stub: ", cluster_stub_i)
-    message("Analysis workflow: ", current_analysis_mode)
+    message("Analysis workflow: ", current_ov_approach)
     message("======================================")
 
     set_analysis_run_paths(
@@ -62,7 +62,7 @@ for (analysis_mode in analysis_modes_to_run) {
 
       set_buffer_output_dirs(buffer_km)
 
-      if (current_analysis_mode == "whole_cluster") {
+      if (current_ov_approach == "ov_whole_cluster") {
         message("Sourcing 05_build_transition_tables_whole_cluster.R")
         source("05_build_transition_tables_whole_cluster.R")
 
@@ -85,7 +85,7 @@ for (analysis_mode in analysis_modes_to_run) {
   }
 
   if (length(buffer_sensitivity_reports_all) == 0) {
-    warning("No buffer sensitivity reports were generated for ", current_analysis_mode, ".")
+    warning("No buffer sensitivity reports were generated for ", current_ov_approach, ".")
   } else {
     buffer_sensitivity_report <- dplyr::bind_rows(buffer_sensitivity_reports_all) %>%
       arrange(cluster_method, cluster_radius_km, buffer_km)

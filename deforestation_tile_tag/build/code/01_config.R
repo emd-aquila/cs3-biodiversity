@@ -45,7 +45,7 @@ defor_spatial_dir <- file.path("..", "..", "..", "spatial_data", "deforestation"
 defor_spatial_file <- file.path(defor_spatial_dir,"deforestation_50km.shp")
 
 defor_tabular_dir <- file.path("..", "..", "..", "spatial_data", "deforestation", "tabular")
-defor_tabular_file <- file.path(defor_tabular_dir, "deforestation_tile_total_ha_SPAM2020_2001_2024.csv")
+defor_tabular_file <- file.path(defor_tabular_dir, "deforestation_data_summarized.csv")
 
 cluster_dir <- file.path("..", "..", "..", "cluster", "output")
 
@@ -53,7 +53,7 @@ cluster_dir <- file.path("..", "..", "..", "cluster", "output")
 # Cache files that are slow to rebuild because large
 # -----------------------
 
-defor_tiles_cache <- file.path(build_tmp_dir, "defor_tiles_sf.rds")
+defor_tiles_cache <- file.path(build_tmp_dir, "defor_tiles_sf_v2.rds")
 
 # -----------------------
 # Helper for run-specific paths
@@ -68,6 +68,7 @@ set_cluster_run_paths <- function(cluster_method, cluster_radius_km) {
   
   cluster_file_path <<- file.path(
     cluster_dir,
+    cluster_method,
     paste0(cluster_stub, "_model_df_clustered.csv")
   )
   

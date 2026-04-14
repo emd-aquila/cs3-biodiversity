@@ -100,7 +100,7 @@ if (nrow(cluster_tag_status) == 0 || nrow(aez_summary) == 0) {
     group_by(AEZ, cluster_id) %>%
     slice(1) %>%
     ungroup() %>%
-    select(AEZ, cluster_id, sample_id, year, dist_to_medoid)
+    dplyr::select(AEZ, cluster_id, sample_id, year, dist_to_medoid)
   
   cluster_points <- cluster_points %>%
     left_join(
@@ -109,7 +109,7 @@ if (nrow(cluster_tag_status) == 0 || nrow(aez_summary) == 0) {
     ) %>%
     left_join(
       cluster_tag_status %>%
-        select(AEZ, cluster_id, tagged_any_tile, tagged_ha_tile),
+        dplyr::select(AEZ, cluster_id, tagged_any_tile, tagged_ha_tile),
       by = c("AEZ", "cluster_id")
     )
   

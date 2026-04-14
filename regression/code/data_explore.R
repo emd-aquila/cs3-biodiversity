@@ -19,24 +19,34 @@ source("02_helpers.R")
 # User settings
 # -----------------------
 
+data_explore_dir <- file.path(output_dir, "data_explore")
+regression_scale_target <- "non_annualized"
+ov_approach_target <- "ov_whole_cluster"
+defor_approach_target <- "defor_tile_total_ha_total"
 cluster_method_target <- "clara"
 cluster_radius_km_target <- 12.5
 buffer_km_target <- 1
 defor_transform_target <- "raw"
+filter_neg_delta_ov_target <- FALSE
 
-focus_aez_map <- 9
+focus_aez_map <- 5
 save_outputs <- TRUE
 
 # -----------------------
 # Set current run paths
 # -----------------------
 
+set_regression_scale(regression_scale_target)
+set_delta_ov_approach(ov_approach_target)
+set_defor_approach(defor_approach_target)
+
 set_regression_run_paths(
   cluster_method = cluster_method_target,
   cluster_radius_km = cluster_radius_km_target,
-  buffer_km = buffer_km_target,
-  defor_transform = defor_transform_target
+  buffer_km = buffer_km_target
 )
+
+filter_neg_delta_ov <- filter_neg_delta_ov_target
 
 message("Sourcing 03_load_data.R")
 source("03_load_data.R")
@@ -47,15 +57,15 @@ source("03_load_data.R")
 
 cluster_sites_path <- file.path(canonical_spatial_dir, "cluster_sites.gpkg")
 defor_tile_geometry_path <- file.path(canonical_spatial_dir, "defor_tile_geometry.gpkg")
-cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "cluster_buffer_tile.csv")
+cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "matched_clusters_tiles.csv")
 aez_path <- file.path(repo_root, "spatial_data", "aez", "AEZ_shp_file.shp")
 
 explore_output_dir <- file.path(
-  "..",
-  "data_explore",
-  current_buffer_stub,
-  current_cluster_stub,
-  paste0("defor_", current_defor_transform)
+  build_run_label(
+    defor_transform = defor_transform_target,
+    label_type = "defor_transform_path",
+    base_dir = data_explore_dir
+  )
 )
 
 dir.create(explore_output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -94,8 +104,36 @@ cluster_deltas_explore <- readr::read_csv(cluster_deltas_path, show_col_types = 
   normalize_cluster_deltas_schema() %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
-    cluster_id = as.character(cluster_id)
-  )
+    cluster_id = as.character(cluster_id),
+    delta_ov_non_annualized = as.numeric(delta_ov),
+    delta_defor_ha_non_annualized = as.numeric(.data[[current_defor_source_col]]),
+    delta_defor_ha_annualized_selected = if_else(
+      !is.na(year_gap) & year_gap > 0,
+      delta_defor_ha_non_annualized / year_gap,
+      NA_real_
+    ),
+    delta_ov = if (identical(current_regression_scale, "annualized")) {
+      as.numeric(delta_ov_annualized)
+    } else {
+      delta_ov_non_annualized
+    },
+    delta_defor_ha = if (identical(current_regression_scale, "annualized")) {
+      delta_defor_ha_annualized_selected
+    } else {
+      delta_defor_ha_non_annualized
+    },
+    delta_defor_ha_annualized = if_else(
+      !is.na(year_gap) & year_gap > 0,
+      delta_defor_ha_non_annualized / year_gap,
+      NA_real_
+    )
+  ) %>%
+  log1p_defor()
+
+if (isTRUE(filter_neg_delta_ov_target)) {
+  cluster_deltas_explore <- cluster_deltas_explore %>%
+    filter(delta_ov < 0)
+}
 
 cluster_sites <- sf::read_sf(cluster_sites_path) %>%
   mutate(
@@ -122,21 +160,38 @@ aez_sf <- sf::read_sf(aez_path) %>%
 # Choose x-axis variable for scatterplots
 # -----------------------
 
+if (identical(defor_transform_target, "p90")) {
+  cluster_deltas_explore <- cluster_deltas_explore %>%
+    filter(
+      !is.na(AEZ),
+      !is.na(delta_defor_ha),
+      !is.na(delta_ov)
+    ) %>%
+    group_by(AEZ) %>%
+    mutate(
+      upper_defor = quantile(delta_defor_ha, winsorization_threshold, na.rm = TRUE)
+    ) %>%
+    filter(delta_defor_ha <= upper_defor) %>%
+    ungroup() %>%
+    dplyr::select(-upper_defor) %>%
+    log1p_defor()
+}
+
+if (identical(defor_transform_target, "winsorized")) {
+  cluster_deltas_explore <- winsorize(
+    cluster_deltas_explore,
+    threshold = winsorization_threshold
+  )
+}
+
 x_col <- dplyr::case_when(
-  current_defor_transform == "raw" ~ "delta_defor_ha",
-  current_defor_transform == "log1p" ~ "log1p_delta_defor_ha",
+  defor_transform_target == "log1p" ~ "log1p_delta_defor_ha",
+  defor_transform_target %in% c("raw", "rlm", "p90", "winsorized") ~ "delta_defor_ha",
   TRUE ~ NA_character_
 )
 
 if (is.na(x_col)) {
-  stop("Unknown current_defor_transform: ", current_defor_transform, call. = FALSE)
-}
-
-if (!"log1p_delta_defor_ha" %in% names(cluster_deltas_explore)) {
-  cluster_deltas_explore <- cluster_deltas_explore %>%
-    mutate(
-      log1p_delta_defor_ha = log1p(delta_defor_ha)
-    )
+  stop("Unknown defor_transform_target: ", defor_transform_target, call. = FALSE)
 }
 
 # -----------------------
@@ -168,7 +223,7 @@ focus_cluster_points <- cluster_sites %>%
   group_by(AEZ, cluster_id) %>%
   slice(1) %>%
   ungroup() %>%
-  select(AEZ, cluster_id, sample_id, year, dist_to_medoid) %>%
+  dplyr::select(AEZ, cluster_id, sample_id, year, dist_to_medoid) %>%
   left_join(cluster_summary_focus_aez, by = c("AEZ", "cluster_id"))
 
 focus_tile_ids <- cluster_buffer_tile %>%
@@ -319,7 +374,10 @@ for (aez_value in aez_values_to_plot) {
         "Method = ", current_cluster_method,
         " | Radius = ", sprintf("%.1f", current_cluster_radius_km), " km",
         " | Buffer = ", buffer_km_target, " km",
-        " | Transform = ", current_defor_transform
+        " | Regression scale = ", current_regression_scale,
+        " | OV approach = ", current_ov_approach,
+        " | Defor approach = ", current_defor_approach,
+        " | Transform = ", defor_transform_target
       ),
       x = x_col,
       y = "delta_ov",

@@ -1,5 +1,5 @@
 # =====================================================
-# Configuration of paths and analysis settings
+# Configuration of paths and run settings for the clustering pipeline
 # =====================================================
 
 # -----------------------
@@ -7,14 +7,13 @@
 # -----------------------
 
 # Base directories relative to code/
-code_dir <- "code"
-input_dir <- "input"
-output_dir <- "output"
-tmp_dir <- "tmp"
+cluster_dir <- ".."
+output_dir <- file.path(cluster_dir, "output")
+tmp_dir <- file.path(cluster_dir, "tmp")
 
-# External project folders relative to cluster/
-predicts_out_dir <- file.path("..", "predicts_ov_table", "analysis", "output")
-aez_dir <- file.path("..", "spatial_data", "aez")
+# Upstream sources relative to code/
+predicts_output_dir <- file.path("..", "..", "predicts_ov_table", "analysis", "output")
+aez_dir <- file.path("..", "..", "spatial_data", "aez")
 
 # Internal subdirectories
 checkpoint_root <- file.path(tmp_dir, "checkpoints")
@@ -27,15 +26,17 @@ summary_dir <- file.path(output_dir, "summary")
 dirs_to_create <- c(output_dir, tmp_dir, checkpoint_root, summary_dir)
 
 for (d in dirs_to_create) {
-  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  if (!dir.exists(d)) {
+    dir.create(d, recursive = TRUE)
+  }
 }
 
 # -----------------------
 # Input file paths
 # -----------------------
 
-# Read directly from predicts_ov_table output rather than copying into input/
-tagged_sites_file <- file.path(predicts_out_dir, "ov_AEZ_tag.csv")
+# Read tagged site observations directly from the upstream project output.
+tagged_sites_file <- file.path(predicts_output_dir, "ov_AEZ_tag.csv")
 
 # AEZ shapefile
 aez_file <- file.path(aez_dir, "AEZ_shp_file.shp")
@@ -55,12 +56,11 @@ if (!file.exists(aez_file)) {
 # -----------------------
 # Building a config grid for clustering pipeline
 # -----------------------
-method = c("PAM", "GREEDY", "CLARA")
-radius_km = c(10, 12.5, 17.5, 20, 25)
-radius_m <- radius_km * 1000
+clustering_methods <- c("PAM", "GREEDY", "CLARA")
+clustering_radii_km <- c(10, 12.5, 17.5, 20, 25)
 
 run_grid <- tidyr::crossing(
-  method,
-  radius_km
+  method = clustering_methods,
+  radius_km = clustering_radii_km
 ) %>%
   mutate(radius_m = radius_km * 1000)

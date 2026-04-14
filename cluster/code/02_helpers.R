@@ -272,6 +272,14 @@ get_method_spec <- function(method, radius_m) {
 # Run one clustering configuration and export results
 # -----------------------
 
+build_output_prefix <- function(output_root, file_stub, radius_str) {
+  file.path(
+    output_root,
+    file_stub,
+    paste0(file_stub, "_rad_", radius_str, "km")
+  )
+}
+
 run_one_clustering_config <- function(method, radius_m, sites_tbl, model_df_tagged, aez_order) {
   spec <- get_method_spec(method, radius_m)
   
@@ -283,9 +291,10 @@ run_one_clustering_config <- function(method, radius_m, sites_tbl, model_df_tagg
     paste0(spec$file_stub, "_rad_", radius_str, "km")
   )
   
-  out_prefix <- file.path(
-    output_dir,
-    paste0(spec$file_stub, "_rad_", radius_str, "km")
+  out_prefix <- build_output_prefix(
+    output_root = output_dir,
+    file_stub = spec$file_stub,
+    radius_str = radius_str
   )
   
   run <- cluster_within_aez(
@@ -790,7 +799,7 @@ join_clusters_back <- function(model_df_tagged,
     dplyr::mutate(cluster_missing = dplyr::coalesce(cluster_missing, TRUE))
 }
 
-# Export bundle: save cluster results and metadata.
+# Export one clustering run as a bundle plus companion csv files.
 export_bundle <- function(out_prefix,
                           model_df_clustered,
                           sites_tbl_clustered,
@@ -821,7 +830,7 @@ parse_radius_km <- function(path) {
   as.numeric(m)
 }
 
-# Parse method (PAM, CLARA, GREEDY) from a filename.
+# Parse method (PAM, CLARA, GREEDY) from a saved output path.
 parse_method <- function(path) {
   x <- tolower(basename(path))
   if (stringr::str_detect(x, "clara"))  return("CLARA")

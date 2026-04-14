@@ -21,8 +21,8 @@ source("02_helpers.R")
 message("Sourcing 03_load_defor_data.R")
 source("03_load_defor_data.R")
 
-message("Sourcing 04_build_defor_tables.R")
-source("04_build_defor_tables.R")
+message("Sourcing 04_build_defor.R")
+source("04_build_defor.R")
 
 # -----------------------
 # Loop over cluster method x radius runs
@@ -52,8 +52,8 @@ for (i in seq_len(nrow(cluster_run_grid))) {
   message("Sourcing 06_build_cluster_tables.R")
   source("06_build_cluster_tables.R")
   
-  message("Sourcing 07_build_cluster_footprints_tag_defor.R")
-  source("07_build_cluster_footprints_tag_defor.R")
+  message("Sourcing 07_build_cluster_footprints.R")
+  source("07_build_cluster_footprints.R")
   
   message("Sourcing 08_write_canonical_outputs.R")
   source("08_write_canonical_outputs.R")

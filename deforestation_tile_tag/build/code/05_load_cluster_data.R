@@ -34,6 +34,6 @@ assert_has_cols(
   "cluster_raw"
 )
 
-message("Loaded cluster input:")
-message("  file: ", basename(cluster_file_path))
-message("  rows: ", nrow(cluster_raw))
+message("Loaded raw cluster inputs:")
+message("  cluster_raw file: ", basename(cluster_file_path))
+message("  cluster_raw rows: ", nrow(cluster_raw))

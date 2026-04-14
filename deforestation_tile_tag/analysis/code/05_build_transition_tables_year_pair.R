@@ -173,7 +173,7 @@ if (nrow(cluster_buffer_this) == 0) {
   # -----------------------
   
   interval_defor_tagged_ha <- cluster_pairs_tagged_ha %>%
-    select(AEZ, cluster_id, buffer_km, year_t1, year_t2) %>%
+    dplyr::select(AEZ, cluster_id, buffer_km, year_t1, year_t2) %>%
     left_join(
       cluster_buffer_year_defor_this,
       by = c("AEZ", "cluster_id", "buffer_km"),
@@ -182,7 +182,12 @@ if (nrow(cluster_buffer_this) == 0) {
     filter(year >= year_t1, year <= year_t2) %>%
     group_by(AEZ, cluster_id, buffer_km, year_t1, year_t2) %>%
     summarise(
-      delta_defor_ha = sum(defor_total_ha_year, na.rm = TRUE),
+      delta_defor_ha_total_raw = sum(defor_ha_total_raw, na.rm = TRUE),
+      delta_defor_ha_total_avg = sum(defor_ha_total_avg, na.rm = TRUE),
+      delta_defor_ha_total_rel_pct = sum(defor_ha_total_rel_pct, na.rm = TRUE),
+      delta_defor_ha_crops_raw = sum(defor_ha_crops_raw, na.rm = TRUE),
+      delta_defor_ha_crops_avg = sum(defor_ha_crops_avg, na.rm = TRUE),
+      delta_defor_ha_crops_rel_pct = sum(defor_ha_crops_rel_pct, na.rm = TRUE),
       n_defor_years = n_distinct(year),
       n_defor_years_expected = first(year_t2 - year_t1 + 1L),
       .groups = "drop"
@@ -199,13 +204,14 @@ if (nrow(cluster_buffer_this) == 0) {
     ) %>%
     left_join(
       cluster_medoids %>%
-        select(AEZ, cluster_id, medoid_latitude, medoid_longitude),
+        dplyr::select(AEZ, cluster_id, medoid_latitude, medoid_longitude),
       by = c("AEZ", "cluster_id")
     ) %>%
     mutate(
+      delta_defor_ha = delta_defor_ha_total_raw,
       delta_defor_ha_annualized = dplyr::if_else(
-        !is.na(n_defor_years) & n_defor_years > 0,
-        delta_defor_ha / n_defor_years,
+        !is.na(year_gap) & year_gap > 0,
+        delta_defor_ha / year_gap,
         NA_real_
       ),
       inverse_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
@@ -222,6 +228,7 @@ if (nrow(cluster_buffer_this) == 0) {
       medoid_latitude,
       medoid_longitude,
       n_matched_tiles_with_ha,
+      n_defor_years,
       year_t1,
       year_t2,
       year_gap,
@@ -232,6 +239,12 @@ if (nrow(cluster_buffer_this) == 0) {
       n_sites_t1,
       n_sites_t2,
       delta_defor_ha,
+      delta_defor_ha_total_raw,
+      delta_defor_ha_total_avg,
+      delta_defor_ha_total_rel_pct,
+      delta_defor_ha_crops_raw,
+      delta_defor_ha_crops_avg,
+      delta_defor_ha_crops_rel_pct,
       delta_defor_ha_annualized,
       inverse_change
     ) %>%
@@ -243,9 +256,12 @@ if (nrow(cluster_buffer_this) == 0) {
       "AEZ", "cluster_id", "buffer_km",
       "medoid_latitude", "medoid_longitude",
       "n_matched_tiles_with_ha",
+      "n_defor_years",
       "year_t1", "year_t2", "year_gap",
       "ov_t1", "ov_t2", "delta_ov", "delta_ov_annualized",
       "n_sites_t1", "n_sites_t2",
+      "delta_defor_ha_total_raw", "delta_defor_ha_total_avg", "delta_defor_ha_total_rel_pct",
+      "delta_defor_ha_crops_raw", "delta_defor_ha_crops_avg", "delta_defor_ha_crops_rel_pct",
       "delta_defor_ha", "delta_defor_ha_annualized",
       "inverse_change"
     ),
@@ -260,7 +276,7 @@ if (nrow(cluster_buffer_this) == 0) {
   cluster_year_panel <- cluster_buffer_year_defor_this %>%
     left_join(
       cluster_year_ov %>%
-        select(AEZ, cluster_id, year, median_ov_year, n_sites_year),
+        dplyr::select(AEZ, cluster_id, year, median_ov_year, n_sites_year),
       by = c("AEZ", "cluster_id", "year")
     ) %>%
     left_join(
@@ -279,8 +295,8 @@ if (nrow(cluster_buffer_this) == 0) {
       n_tiles = n_distinct(tile_id),
       n_countries = n_distinct(country_name),
       n_tiles_with_any_ha_info = sum(has_ha_info, na.rm = TRUE),
-      mean_years_with_ha = mean(n_years_with_ha, na.rm = TRUE),
-      median_years_with_ha = median(n_years_with_ha, na.rm = TRUE),
+      matched_area_ha = sum(intersection_area_ha, na.rm = TRUE),
+      overlap_share_sum = sum(normalized_overlap_share, na.rm = TRUE),
       .groups = "drop"
     ) %>%
     arrange(AEZ, cluster_id)

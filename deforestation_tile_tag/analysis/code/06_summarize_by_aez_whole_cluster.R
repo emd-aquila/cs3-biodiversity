@@ -138,7 +138,7 @@ if (nrow(cluster_tag_status) == 0) {
       cluster_stub = if (exists("current_cluster_stub")) current_cluster_stub else NA_character_,
       .before = 1
     ) %>%
-    select(
+    dplyr::select(
       cluster_method,
       cluster_radius_km,
       cluster_stub,

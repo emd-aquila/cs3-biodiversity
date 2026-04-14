@@ -6,13 +6,14 @@
 # =====================================================
 
 
-## ----------------------------
-## Load bundle files from ./outputs
-## ----------------------------
+# -----------------------
+# Load bundle files from output/<method>/
+# -----------------------
 
 bundle_paths <- list.files(
   output_dir,
   pattern = "_bundle\\.rds$",
+  recursive = TRUE,
   full.names = TRUE
 )
 

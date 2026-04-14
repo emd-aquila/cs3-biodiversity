@@ -6,6 +6,13 @@ if (!exists("canonical_tabular_dir") || !exists("canonical_spatial_dir")) {
   stop("Output directories are not defined. Run set_cluster_run_paths() first.")
 }
 
+legacy_tabular_paths <- file.path(
+  canonical_tabular_dir,
+  c("cluster_buffer_tile.csv", "cluster_buffer_year_defor.csv")
+)
+
+file.remove(legacy_tabular_paths[file.exists(legacy_tabular_paths)])
+
 # -----------------------
 # Write tabular outputs
 # -----------------------
@@ -22,12 +29,18 @@ write_csv_safe(
 
 write_csv_safe(
   cluster_buffer_tile,
-  file.path(canonical_tabular_dir, "cluster_buffer_tile.csv")
+  file.path(canonical_tabular_dir, "matched_clusters_tiles.csv")
 )
 
 write_csv_safe(
-  cluster_buffer_year_defor,
-  file.path(canonical_tabular_dir, "cluster_buffer_year_defor.csv")
+  cluster_buffer_year_defor %>%
+    mutate(
+      across(
+        starts_with("defor_ha_"),
+        ~ round(.x, 3)
+      )
+    ),
+  file.path(canonical_tabular_dir, "cluster_year_defor.csv")
 )
 
 # -----------------------

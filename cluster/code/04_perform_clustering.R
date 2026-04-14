@@ -1,6 +1,6 @@
 # =====================================================
-# Run clustering methods and export results
-# Run all method-radius combinations in the config grid.
+# Run all method-radius combinations in the config grid and write
+# each result bundle to a method-specific output subdirectory.
 # =====================================================
 
 stopifnot(exists("sites_tbl"), exists("model_df_tagged"))

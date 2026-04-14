@@ -3,7 +3,7 @@
 # =====================================================
 
 # ------------------------------
-# Load input data and ensure it has necessary columns
+# Assert input data exists, load and normalize it, and ensure it has necessary columns
 # ------------------------------
 assert_exists(cluster_deltas_path)
 
@@ -12,32 +12,67 @@ cluster_deltas_raw <- read_csv(cluster_deltas_path, show_col_types = FALSE) %>%
 
 assert_has_cols(
   cluster_deltas_raw,
-  cluster_deltas_required_cols,
+  required_cluster_deltas_cols,
+  "cluster_deltas_raw"
+)
+
+assert_has_cols(
+  cluster_deltas_raw,
+  current_defor_source_col,
   "cluster_deltas_raw"
 )
 
 # ------------------------------
-# Filter and transform raw data as needed
+# Select the configured scale, filter, and transform raw data
 # ------------------------------
 
-# Filter to only negative delta OV values, if applicable
+# Select the configured deforestation and OV scale, then build log1p from that selected deforestation value.
+cluster_deltas <- cluster_deltas_raw %>%
+  mutate(
+    delta_ov_non_annualized = as.numeric(delta_ov),
+    delta_defor_ha_non_annualized = as.numeric(.data[[current_defor_source_col]]),
+    delta_defor_ha_annualized_selected = if_else(
+      !is.na(year_gap) & year_gap > 0,
+      delta_defor_ha_non_annualized / year_gap,
+      NA_real_
+    ),
+    delta_ov = if (identical(current_regression_scale, "annualized")) {
+      as.numeric(delta_ov_annualized)
+    } else {
+      delta_ov_non_annualized
+    },
+    delta_defor_ha = if (identical(current_regression_scale, "annualized")) {
+      delta_defor_ha_annualized_selected
+    } else {
+      delta_defor_ha_non_annualized
+    },
+    delta_defor_ha_annualized = if_else(
+      !is.na(year_gap) & year_gap > 0,
+      delta_defor_ha_non_annualized / year_gap,
+      NA_real_
+    ),
+    inverse_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
+      (
+        (delta_ov > 0 & delta_defor_ha < 0) |
+          (delta_ov < 0 & delta_defor_ha > 0)
+      )
+    )
+
+# Filter to only negative delta OV values on the selected scale, if applicable.
 if (filter_neg_delta_ov == TRUE) {
-  cluster_deltas <- cluster_deltas_raw %>% 
+  cluster_deltas <- cluster_deltas %>%
     filter(delta_ov < 0)
-} else {
-  cluster_deltas <- cluster_deltas_raw
 }
 
-# add the log1p transformed deltaDefor as a new column 
 cluster_deltas <- cluster_deltas %>%
-  mutate(
-    log1p_delta_defor_ha = log1p(delta_defor_ha)
-  )
+  log1p_defor()
 
-# clean up cluster_deltas_raw so we have usable regression data
+# clean up cluster_deltas_raw so regression data is usable
 regression_data <- build_regression_data(cluster_deltas)
   
 message("Loaded cluster_deltas from: ", cluster_deltas_path)
 message("Rows in cluster_deltas_raw: ", nrow(cluster_deltas_raw))
+message("Regression scale: ", current_regression_scale)
+message("Selected deforestation source column: ", current_defor_source_col)
 message("Created regression dataset 'regression_data'.")
 message("Rows in regression_data: ", nrow(regression_data))

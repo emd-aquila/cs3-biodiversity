@@ -2,7 +2,7 @@
 # Build canonical biodiversity cluster tables
 # Creates:
 #   - cluster_sites    : one row per site observation
-#   - cluster_year_ov  : one row per cluster-year
+#   - cluster_year_ov.csv  : one row per cluster-year
 # =====================================================
 
 # -----------------------
@@ -26,7 +26,9 @@ assert_has_cols(
     "Latitude",
     "Longitude",
     "year",
-    "ov_score"
+    "ov_score",
+    "method",
+    "dist_to_medoid"
   ),
   "cluster_raw"
 )

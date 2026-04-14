@@ -28,8 +28,8 @@ if (length(missing_objects) > 0) {
 # -----------------------
 
 cluster_year_ov_path <- file.path(canonical_tabular_dir, "cluster_year_ov.csv")
-cluster_buffer_year_defor_path <- file.path(canonical_tabular_dir, "cluster_buffer_year_defor.csv")
-cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "cluster_buffer_tile.csv")
+cluster_buffer_year_defor_path <- file.path(canonical_tabular_dir, "cluster_year_defor.csv")
+cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "matched_clusters_tiles.csv")
 defor_tile_year_path <- file.path(canonical_tabular_dir, "defor_tile_year.csv")
 
 cluster_buffer_path <- file.path(canonical_spatial_dir, "cluster_buffer.gpkg")
@@ -73,19 +73,26 @@ assert_has_cols(
 
 assert_has_cols(
   cluster_buffer_year_defor,
-  c("AEZ", "cluster_id", "buffer_km", "year", "defor_total_ha_year", "n_tiles_with_ha"),
+  c(
+    "AEZ", "cluster_id", "buffer_km", "year", "n_tiles_with_ha",
+    "defor_ha_total_raw", "defor_ha_total_avg", "defor_ha_total_rel_pct",
+    "defor_ha_crops_raw", "defor_ha_crops_avg", "defor_ha_crops_rel_pct"
+  ),
   "cluster_buffer_year_defor"
 )
 
 assert_has_cols(
   cluster_buffer_tile,
-  c("AEZ", "cluster_id", "buffer_km", "tile_id", "country_name", "n_years_with_ha", "has_ha_info"),
+  c(
+    "AEZ", "cluster_id", "buffer_km", "tile_id", "country_name", "has_ha_info",
+    "intersection_area_ha", "normalized_overlap_share"
+  ),
   "cluster_buffer_tile"
 )
 
 assert_has_cols(
   defor_tile_year,
-  c("tile_id", "year", "defor_total_ha"),
+  c("tile_id", "year", "defor_total_ha", "defor_crops_ha", "defor_livestock_ha"),
   "defor_tile_year"
 )
 
@@ -139,13 +146,18 @@ cluster_buffer_tile <- cluster_buffer_tile %>%
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
     buffer_km = as.numeric(buffer_km),
-    tile_id = as.character(tile_id)
+    tile_id = as.character(tile_id),
+    intersection_area_ha = as.numeric(intersection_area_ha),
+    normalized_overlap_share = as.numeric(normalized_overlap_share)
   )
 
 defor_tile_year <- defor_tile_year %>%
   mutate(
     tile_id = as.character(tile_id),
-    year = as.integer(year)
+    year = as.integer(year),
+    defor_total_ha = as.numeric(defor_total_ha),
+    defor_crops_ha = as.numeric(defor_crops_ha),
+    defor_livestock_ha = as.numeric(defor_livestock_ha)
   )
 
 cluster_sites <- cluster_sites %>%
@@ -180,7 +192,7 @@ defor_tiles_all_sf <- defor_tile_geometry %>%
 
 cluster_medoids <- cluster_sites %>%
   st_drop_geometry() %>%
-  select(AEZ, cluster_id, latitude, longitude, dist_to_medoid) %>%
+  dplyr::select(AEZ, cluster_id, latitude, longitude, dist_to_medoid) %>%
   distinct() %>%
   group_by(AEZ, cluster_id) %>%
   slice_min(dist_to_medoid, n = 1, with_ties = FALSE) %>%

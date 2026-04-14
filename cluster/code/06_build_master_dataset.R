@@ -12,6 +12,7 @@
 clustered_paths <- list.files(
   output_dir,
   pattern = "_model_df_clustered\\.csv$",
+  recursive = TRUE,
   full.names = TRUE
 )
 

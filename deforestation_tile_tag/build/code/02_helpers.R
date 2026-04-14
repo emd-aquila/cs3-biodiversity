@@ -57,3 +57,32 @@ write_gpkg_safe <- function(data, path, delete_dsn = TRUE) {
   sf::st_write(data, dsn = path, delete_dsn = delete_dsn, quiet = TRUE)
   message("Wrote: ", path)
 }
+
+assert_groupwise_share_sum <- function(data,
+                                       keys,
+                                       share_col,
+                                       expected = 1,
+                                       tolerance = 1e-6,
+                                       data_name = deparse(substitute(data))) {
+  share_check <- data %>%
+    group_by(across(all_of(keys))) %>%
+    summarise(
+      share_sum = sum(.data[[share_col]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(abs(share_sum - expected) > tolerance)
+
+  if (nrow(share_check) > 0) {
+    stop(
+      paste0(
+        data_name,
+        " has groupwise ",
+        share_col,
+        " sums outside tolerance of ",
+        expected,
+        "."
+      ),
+      call. = FALSE
+    )
+  }
+}

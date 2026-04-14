@@ -1,7 +1,8 @@
 # =====================================================
-# Load and prepare input data for biodiversity site clustering
-# Read tagged site observations and construct the unique-site table
-# used for clustering.
+# Load and prepare the tagged site data used for clustering.
+# This stage reads the upstream tagged observations table, constructs one
+# row per unique site, and attaches the year-coverage metadata needed
+# for the clustering year rule.
 # =====================================================
 
 # -----------------------
@@ -22,12 +23,15 @@ message("  rows: ", nrow(model_df_tagged))
 # Construct unique site table
 # -----------------------
 
-# Keep one record per AEZ and rounded location
+# Keep one record per AEZ and rounded location. These are the spatial
+# points we cluster within each AEZ.
 unique_sites <- model_df_tagged %>% 
   distinct(AEZ, lat_r, lon_r, .keep_all = TRUE) %>% 
   arrange(AEZ)
 
-# convert to sf points in geographic coordinates (WGS84, EPSG 4326); project onto meter-based CRS (6933 for WEC); pull projected coordinates into plain columns
+# Convert to sf points in geographic coordinates (EPSG 4326),
+# then project into a meter-based CRS so the clustering radius is applied
+# in meters rather than degrees.
 unique_sf <- unique_sites %>% 
   st_as_sf(
     coords = c("lon_r", "lat_r"),
@@ -65,7 +69,7 @@ site_years <- model_df_tagged %>%
     .groups = "drop"
   )
 
-# Join year information
+# Join site-level year information onto the clustering table
 sites_tbl <- sites_tbl %>% 
   left_join(site_years, by = c("AEZ", "lat_r", "lon_r")) %>% 
   select(
