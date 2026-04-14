@@ -10,7 +10,7 @@ This repository contains three connected analysis pipelines:
 2. **`cluster/`** clusters biodiversity sampling sites across multiple methods and radii, then summarizes OV spread at cluster and AEZ levels.
 3. **`deforestation_tile_tag/`** builds canonical deforestation and cluster spatial/tabular outputs, then analyzes transitions, buffer sensitivity, and AEZ summaries.
 
-Supporting geospatial inputs live in **`spatial_data/`**, including AEZ boundaries and deforestation shapefiles.
+Supporting spatial data are stored in **`spatial_data/`**, including AEZ boundaries, annual deforestation files, and annual canopy height data.
 
 ## Repository structure
 
