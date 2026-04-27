@@ -34,6 +34,17 @@ assert_has_cols(
   "cluster_raw"
 )
 
+available_ov_score_cols <- intersect(ov_score_cols, names(cluster_raw))
+
+if (length(available_ov_score_cols) == 0) {
+  stop(
+    "None of the configured OV score columns were found in cluster_raw: ",
+    paste(ov_score_cols, collapse = ", "),
+    call. = FALSE
+  )
+}
+
 message("Loaded raw cluster inputs:")
 message("  cluster_raw file: ", basename(cluster_file_path))
 message("  cluster_raw rows: ", nrow(cluster_raw))
+message("  OV score columns available: ", paste(available_ov_score_cols, collapse = ", "))

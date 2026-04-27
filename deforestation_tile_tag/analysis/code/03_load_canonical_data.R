@@ -45,6 +45,34 @@ assert_exists(cluster_sites_path)
 assert_exists(defor_tile_geometry_path)
 
 # -----------------------
+# Read GeoPackages through a staged temp copy when needed
+# -----------------------
+
+read_sf_safely <- function(path, temp_dir) {
+  if (!grepl("\\.gpkg$", path, ignore.case = TRUE)) {
+    return(sf::read_sf(path))
+  }
+
+  dir.create(temp_dir, recursive = TRUE, showWarnings = FALSE)
+
+  staged_path <- file.path(temp_dir, basename(path))
+  journal_path <- paste0(path, "-journal")
+  staged_journal_path <- paste0(staged_path, "-journal")
+
+  file.copy(path, staged_path, overwrite = TRUE)
+
+  if (file.exists(staged_journal_path)) {
+    file.remove(staged_journal_path)
+  }
+
+  if (file.exists(journal_path)) {
+    message("Ignoring GeoPackage journal while staging: ", basename(journal_path))
+  }
+
+  sf::read_sf(staged_path)
+}
+
+# -----------------------
 # Read tabular files
 # -----------------------
 
@@ -57,9 +85,11 @@ defor_tile_year <- read_csv(defor_tile_year_path, show_col_types = FALSE)
 # Read spatial files
 # -----------------------
 
-cluster_buffer <- read_sf(cluster_buffer_path)
-cluster_sites <- read_sf(cluster_sites_path)
-defor_tile_geometry <- read_sf(defor_tile_geometry_path)
+sf_stage_dir <- file.path(analysis_tmp_dir, "sf_stage", current_cluster_stub)
+
+cluster_buffer <- read_sf_safely(cluster_buffer_path, sf_stage_dir)
+cluster_sites <- read_sf_safely(cluster_sites_path, sf_stage_dir)
+defor_tile_geometry <- read_sf_safely(defor_tile_geometry_path, sf_stage_dir)
 
 # -----------------------
 # Validate required columns

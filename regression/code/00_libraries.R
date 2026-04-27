@@ -5,6 +5,7 @@
 library(tidyverse)
 library(fixest)
 library(MASS)
+library(mgcv)
 library(broom)
 library(modelsummary)
 library(sf)

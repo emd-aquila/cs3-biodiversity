@@ -36,7 +36,7 @@ for (d in dirs_to_create) {
 # -----------------------
 
 # Read tagged site observations directly from the upstream project output.
-tagged_sites_file <- file.path(predicts_output_dir, "ov_AEZ_tag.csv")
+tagged_sites_file <- file.path(predicts_output_dir, "site_ov_aez.csv")
 
 # AEZ shapefile
 aez_file <- file.path(aez_dir, "AEZ_shp_file.shp")

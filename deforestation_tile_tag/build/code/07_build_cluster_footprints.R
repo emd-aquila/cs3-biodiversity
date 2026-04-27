@@ -30,25 +30,32 @@ if (length(missing_objects) > 0) {
 }
 
 # -----------------------
-# Build buffered cluster footprints
+# Build unified cluster polygons, then buffer them
 # one row per AEZ-cluster-buffer
 # -----------------------
 
 cluster_buffer <- read_or_build(
   path = cluster_footprints_cache,
   build_fn = function() {
+    cluster_polygons <- cluster_sites %>%
+      group_by(AEZ, cluster_id) %>%
+      summarise(
+        n_sites = n(),
+        .groups = "drop"
+      ) %>%
+      st_make_valid() %>%
+      mutate(
+        geometry = sf::st_convex_hull(geometry)
+      )
+
     purrr::map_dfr(
       buffer_km_vals,
       function(buffer_km) {
         buffer_m <- buffer_km * 1000
-        
-        cluster_sites %>%
-          mutate(buffer_geom = st_buffer(geometry, dist = buffer_m)) %>%
-          st_set_geometry("buffer_geom") %>%
-          group_by(AEZ, cluster_id) %>%
-          summarise(
-            n_sites = n(),
-            .groups = "drop"
+
+        cluster_polygons %>%
+          mutate(
+            geometry = st_buffer(geometry, dist = buffer_m)
           ) %>%
           st_make_valid() %>%
           mutate(buffer_km = buffer_km) %>%

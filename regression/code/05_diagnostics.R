@@ -39,9 +39,9 @@ summary_by_transform <- purrr::imap(
   transform_model_specs,
   ~ {
     prepared_variant <- prepared_by_transform[[.x$prepared_transform]]
-    model_label <- if (identical(.x$fit_kind, "robust")) "rlm" else "ols"
+    model_label <- .x$fit_kind
 
-    build_aez_fit_summary(
+    build_group_fit_summary(
       models_by_transform[[.y]],
       prepared_variant$regression_data,
       model_label,
@@ -65,30 +65,32 @@ purrr::iwalk(
 # Main fitted scatterplots
 # -----------------------------------------------------
 
-purrr::iwalk(
-  transform_model_specs,
-  ~ {
-    models_list <- models_by_transform[[.y]]
+if (isTRUE(write_diagnostic_plots)) {
+  purrr::iwalk(
+    transform_model_specs,
+    ~ {
+      models_list <- models_by_transform[[.y]]
 
-    if (length(models_list) == 0) {
-      return(invisible(NULL))
+      if (length(models_list) == 0) {
+        return(invisible(NULL))
+      }
+
+      prepared_variant <- prepared_by_transform[[.x$prepared_transform]]
+
+      save_family_plot(
+        build_family_plot_from_models(
+          prepared_variant$regression_data,
+          models_list,
+          prepared_variant$regressor_col,
+          .x$plot_title
+        ),
+        output_dirs_by_transform[[.y]],
+        paste0(.x$fit_kind, ".png"),
+        run_label = run_labels_by_transform[[.y]]
+      )
     }
-
-    prepared_variant <- prepared_by_transform[[.x$prepared_transform]]
-
-    save_family_plot(
-      build_family_plot_from_models(
-        prepared_variant$regression_data,
-        models_list,
-        prepared_variant$regressor_col,
-        .x$plot_title
-      ),
-      output_dirs_by_transform[[.y]],
-      if (identical(.x$fit_kind, "robust")) "rlm.png" else "ols.png",
-      run_label = run_labels_by_transform[[.y]]
-    )
-  }
-)
+  )
+}
 
 # -----------------------------------------------------
 # Distribution plots
@@ -109,51 +111,53 @@ regressor_hist_specs <- list(
     data = regression_data_by_transform[["p90"]],
     x_col = "delta_defor_ha",
     title = "Distribution of p90 deforestation"
-  ),
-  winsorized = list(
-    data = regression_data_by_transform[["winsorized"]],
-    x_col = "delta_defor_ha",
-    title = "Distribution of winsorized deforestation"
   )
+  # winsorized = list(
+  #   data = regression_data_by_transform[["winsorized"]],
+  #   x_col = "delta_defor_ha",
+  #   title = "Distribution of winsorized deforestation"
+  # )
 )
 
-purrr::iwalk(
-  regressor_hist_specs,
-  ~ save_family_plot(
-    ggplot(.x$data, aes(x = .data[[.x$x_col]])) +
-      geom_histogram(bins = 40) +
-      labs(
-        x = .x$x_col,
-        y = "Count",
-        title = .x$title
-      ) +
-      theme_minimal(),
-    output_dirs_by_transform[[.y]],
-    "hist_regressor.png",
-    run_label = run_labels_by_transform[[.y]],
-    width = 8,
-    height = 6
+if (isTRUE(write_diagnostic_plots)) {
+  purrr::iwalk(
+    regressor_hist_specs,
+    ~ save_family_plot(
+      ggplot(.x$data, aes(x = .data[[.x$x_col]])) +
+        geom_histogram(bins = 40) +
+        labs(
+          x = .x$x_col,
+          y = "Count",
+          title = .x$title
+        ) +
+        theme_minimal(),
+      output_dirs_by_transform[[.y]],
+      "hist_regressor.png",
+      run_label = run_labels_by_transform[[.y]],
+      width = 8,
+      height = 6
+    )
   )
-)
 
-delta_ov_hist_plot <- ggplot(regression_data, aes(x = delta_ov)) +
-  geom_histogram(bins = 40) +
-  labs(
-    x = "delta_ov",
-    y = "Count",
-    title = "Distribution of delta_ov"
-  ) +
-  theme_minimal()
+  delta_ov_hist_plot <- ggplot(regression_data, aes(x = delta_ov)) +
+    geom_histogram(bins = 40) +
+    labs(
+      x = "delta_ov",
+      y = "Count",
+      title = "Distribution of delta_ov"
+    ) +
+    theme_minimal()
 
-for (transform_name in names(output_dirs_by_transform)) {
-  save_family_plot(
-    delta_ov_hist_plot,
-    output_dirs_by_transform[[transform_name]],
-    "hist_delta_ov.png",
-    run_label = build_run_label(defor_transform = transform_name),
-    width = 8,
-    height = 6
-  )
+  for (transform_name in names(output_dirs_by_transform)) {
+    save_family_plot(
+      delta_ov_hist_plot,
+      output_dirs_by_transform[[transform_name]],
+      "hist_delta_ov.png",
+      run_label = build_run_label(defor_transform = transform_name),
+      width = 8,
+      height = 6
+    )
+  }
 }
 
 message("Finished 05_diagnostics.R")

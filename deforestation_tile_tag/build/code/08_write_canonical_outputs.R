@@ -23,7 +23,13 @@ write_csv_safe(
 )
 
 write_csv_safe(
-  cluster_year_ov,
+  cluster_year_ov %>%
+    mutate(
+      across(
+        where(is.numeric) & !any_of(c("year", "n_sites_year")),
+        ~ round(.x, 3)
+      )
+    ),
   file.path(canonical_tabular_dir, "cluster_year_ov.csv")
 )
 

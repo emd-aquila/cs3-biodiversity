@@ -10,12 +10,25 @@
 analysis_crs <- 6933
 buffer_km_vals <- c(1, 5, 10)
 
+ov_score_cols <- c(
+  "ov_score",
+  "ov_obs_only",
+  "ov_no_HQI",
+  "ov_no_HANPP",
+  "ov_no_MSA",
+  "ov_no_PD",
+  "ov_no_Shannon"
+)
+
 # -----------------------
 # Cluster input selection grid
 # -----------------------
 
-cluster_methods <- c("clara", "pam", "greedy_cover")
-cluster_radius_km_vals <- c(10.0, 12.5, 17.5, 20.0, 25.0)
+cluster_methods <- c("clara") # can choose clara, pam, greedy_cover
+# cluster_methods <- c("clara", "pam", "greedy_cover")
+
+cluster_radius_km_vals <- c(10.0) # can choose 10.0, 12.5, 17.5, 20.0, 25.0
+# cluster_radius_km_vals <- c(10.0, 12.5, 17.5, 20.0, 25.0)
 
 cluster_run_grid <- crossing(
   cluster_method = cluster_methods,
@@ -82,6 +95,6 @@ set_cluster_run_paths <- function(cluster_method, cluster_radius_km) {
   
   cluster_footprints_cache <<- file.path(
     build_tmp_dir,
-    paste0(cluster_stub, "_cluster_footprints_sf.rds")
+    paste0(cluster_stub, "_cluster_footprints_hull_buffer_sf_v2.rds")
   )
 }

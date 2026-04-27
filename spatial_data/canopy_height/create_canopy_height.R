@@ -1,7 +1,7 @@
 library(sf)
 library(dplyr)
 
-aez_dir <- "aez_outputs"
+aez_dir <- "by_aez"
 
 aez_paths <- file.path(aez_dir, paste0("AEZ_", 1:18, ".gpkg"))
 names(aez_paths) <- paste0("AEZ_", 1:18)

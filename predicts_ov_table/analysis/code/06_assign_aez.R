@@ -40,4 +40,4 @@ tagged <- tagged %>%
   relocate(AEZ, .after = sample_id) %>%
   relocate(AEZ_assigned_by_nearest, .after = AEZ)
 
-write_csv_safe(tagged, file.path(output_dir, "ov_AEZ_tag.csv"))
+write_csv_safe(tagged, file.path(output_dir, "site_ov_aez.csv"))

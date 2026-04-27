@@ -19,6 +19,7 @@ required_objects <- c(
   "current_buffer_km",
   "current_buffer_key",
   "current_output_dirs",
+  "ov_score_specs",
   "cluster_year_ov",
   "cluster_buffer_all",
   "cluster_buffer_tile_all",
@@ -44,6 +45,16 @@ if (is.na(current_buffer_km)) {
 
 log_buffer_run(current_buffer_km)
 
+compute_lagged_interval_end <- function(interval_start_year, interval_end_year, year_gap) {
+  dplyr::case_when(
+    is.na(interval_start_year) | is.na(interval_end_year) | is.na(year_gap) ~ NA_integer_,
+    year_gap >= 3L ~ as.integer(interval_end_year - 2L),
+    year_gap == 2L ~ as.integer(interval_end_year - 1L),
+    year_gap == 1L ~ as.integer(interval_start_year),
+    TRUE ~ as.integer(interval_end_year)
+  )
+}
+
 
 # -----------------------
 # Cluster-year pairs
@@ -58,29 +69,12 @@ log_buffer_run(current_buffer_km)
 # One row per consecutive cluster-year pair within a cluster.
 # -----------------------
 
-cluster_year_pairs <- cluster_year_ov %>%
-  arrange(AEZ, cluster_id, year) %>%
-  group_by(AEZ, cluster_id) %>%
-  mutate(
-    year_t2 = lead(year),
-    ov_t2 = lead(median_ov_year),
-    n_sites_t2 = lead(n_sites_year)
-  ) %>%
-  ungroup() %>%
-  filter(!is.na(year_t2)) %>%
-  transmute(
-    AEZ,
-    cluster_id,
-    year_t1 = year,
-    year_t2 = as.integer(year_t2),
-    year_gap = year_t2 - year_t1,
-    ov_t1 = median_ov_year,
-    ov_t2 = ov_t2,
-    n_sites_t1 = n_sites_year,
-    n_sites_t2 = n_sites_t2,
-    delta_ov = ov_t2 - ov_t1,
-    delta_ov_annualized = (ov_t2 - ov_t1) / (year_t2 - year_t1)
-  )
+available_ov_score_specs <- get_available_ov_score_specs(cluster_year_ov)
+cluster_year_pairs <- build_year_pair_ov_table(cluster_year_ov, available_ov_score_specs)
+ov_variant_transition_cols <- available_ov_score_specs %>%
+  filter(ov_method != "ov_full") %>%
+  select(t1_col, t2_col, delta_col, annualized_col) %>%
+  unlist(use.names = FALSE)
   
 # -----------------------
 # Filter current-run canonical tables to current buffer
@@ -117,12 +111,12 @@ if (nrow(cluster_buffer_this) == 0) {
   clusters_tagged_ha_tile <- tibble()
   
   write_csv_safe(
-    cluster_year_panel,
+    round_numeric_cols(cluster_year_panel, digits = 3),
     file.path(current_output_dirs$tmp_dir, "cluster_year_panel.csv")
   )
   
   write_csv_safe(
-    cluster_tile_coverage,
+    round_numeric_cols(cluster_tile_coverage, digits = 3),
     file.path(current_output_dirs$tmp_dir, "cluster_tile_coverage.csv")
   )
   
@@ -173,7 +167,10 @@ if (nrow(cluster_buffer_this) == 0) {
   # -----------------------
   
   interval_defor_tagged_ha <- cluster_pairs_tagged_ha %>%
-    dplyr::select(AEZ, cluster_id, buffer_km, year_t1, year_t2) %>%
+    mutate(
+      lagged_year_end = compute_lagged_interval_end(year_t1, year_t2, year_gap)
+    ) %>%
+    dplyr::select(AEZ, cluster_id, buffer_km, year_t1, year_t2, year_gap, lagged_year_end) %>%
     left_join(
       cluster_buffer_year_defor_this,
       by = c("AEZ", "cluster_id", "buffer_km"),
@@ -188,7 +185,32 @@ if (nrow(cluster_buffer_this) == 0) {
       delta_defor_ha_crops_raw = sum(defor_ha_crops_raw, na.rm = TRUE),
       delta_defor_ha_crops_avg = sum(defor_ha_crops_avg, na.rm = TRUE),
       delta_defor_ha_crops_rel_pct = sum(defor_ha_crops_rel_pct, na.rm = TRUE),
+      delta_defor_ha_total_raw_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_total_raw, 0),
+        na.rm = TRUE
+      ),
+      delta_defor_ha_total_avg_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_total_avg, 0),
+        na.rm = TRUE
+      ),
+      delta_defor_ha_total_rel_pct_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_total_rel_pct, 0),
+        na.rm = TRUE
+      ),
+      delta_defor_ha_crops_raw_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_crops_raw, 0),
+        na.rm = TRUE
+      ),
+      delta_defor_ha_crops_avg_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_crops_avg, 0),
+        na.rm = TRUE
+      ),
+      delta_defor_ha_crops_rel_pct_lagged = sum(
+        dplyr::if_else(year <= first(lagged_year_end), defor_ha_crops_rel_pct, 0),
+        na.rm = TRUE
+      ),
       n_defor_years = n_distinct(year),
+      n_defor_years_lagged = sum(year <= first(lagged_year_end), na.rm = TRUE),
       n_defor_years_expected = first(year_t2 - year_t1 + 1L),
       .groups = "drop"
     )
@@ -209,11 +231,7 @@ if (nrow(cluster_buffer_this) == 0) {
     ) %>%
     mutate(
       delta_defor_ha = delta_defor_ha_total_raw,
-      delta_defor_ha_annualized = dplyr::if_else(
-        !is.na(year_gap) & year_gap > 0,
-        delta_defor_ha / year_gap,
-        NA_real_
-      ),
+      delta_defor_ha_lagged = delta_defor_ha_total_raw_lagged,
       inverse_change = !is.na(delta_ov) & !is.na(delta_defor_ha) &
         (
           (delta_ov > 0 & delta_defor_ha < 0) |
@@ -229,6 +247,7 @@ if (nrow(cluster_buffer_this) == 0) {
       medoid_longitude,
       n_matched_tiles_with_ha,
       n_defor_years,
+      n_defor_years_lagged,
       year_t1,
       year_t2,
       year_gap,
@@ -236,6 +255,7 @@ if (nrow(cluster_buffer_this) == 0) {
       ov_t2,
       delta_ov,
       delta_ov_annualized,
+      pick(any_of(ov_variant_transition_cols)),
       n_sites_t1,
       n_sites_t2,
       delta_defor_ha,
@@ -245,7 +265,13 @@ if (nrow(cluster_buffer_this) == 0) {
       delta_defor_ha_crops_raw,
       delta_defor_ha_crops_avg,
       delta_defor_ha_crops_rel_pct,
-      delta_defor_ha_annualized,
+      delta_defor_ha_lagged,
+      delta_defor_ha_total_raw_lagged,
+      delta_defor_ha_total_avg_lagged,
+      delta_defor_ha_total_rel_pct_lagged,
+      delta_defor_ha_crops_raw_lagged,
+      delta_defor_ha_crops_avg_lagged,
+      delta_defor_ha_crops_rel_pct_lagged,
       inverse_change
     ) %>%
     arrange(AEZ, cluster_id, year_t1, year_t2)
@@ -256,13 +282,16 @@ if (nrow(cluster_buffer_this) == 0) {
       "AEZ", "cluster_id", "buffer_km",
       "medoid_latitude", "medoid_longitude",
       "n_matched_tiles_with_ha",
-      "n_defor_years",
+      "n_defor_years", "n_defor_years_lagged",
       "year_t1", "year_t2", "year_gap",
       "ov_t1", "ov_t2", "delta_ov", "delta_ov_annualized",
       "n_sites_t1", "n_sites_t2",
       "delta_defor_ha_total_raw", "delta_defor_ha_total_avg", "delta_defor_ha_total_rel_pct",
       "delta_defor_ha_crops_raw", "delta_defor_ha_crops_avg", "delta_defor_ha_crops_rel_pct",
-      "delta_defor_ha", "delta_defor_ha_annualized",
+      "delta_defor_ha_lagged",
+      "delta_defor_ha_total_raw_lagged", "delta_defor_ha_total_avg_lagged", "delta_defor_ha_total_rel_pct_lagged",
+      "delta_defor_ha_crops_raw_lagged", "delta_defor_ha_crops_avg_lagged", "delta_defor_ha_crops_rel_pct_lagged",
+      "delta_defor_ha",
       "inverse_change"
     ),
     paste0("cluster_deltas_", current_buffer_key)
@@ -276,7 +305,13 @@ if (nrow(cluster_buffer_this) == 0) {
   cluster_year_panel <- cluster_buffer_year_defor_this %>%
     left_join(
       cluster_year_ov %>%
-        dplyr::select(AEZ, cluster_id, year, median_ov_year, n_sites_year),
+        dplyr::select(
+          AEZ,
+          cluster_id,
+          year,
+          all_of(unique(available_ov_score_specs$cluster_year_col)),
+          n_sites_year
+        ),
       by = c("AEZ", "cluster_id", "year")
     ) %>%
     left_join(

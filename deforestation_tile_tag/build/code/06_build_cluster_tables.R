@@ -17,6 +17,10 @@ if (!exists("analysis_crs")) {
   stop("analysis_crs is not defined. Run 01_config.R first.")
 }
 
+if (!exists("available_ov_score_cols")) {
+  stop("available_ov_score_cols is not defined. Run 05_load_cluster_data.R first.")
+}
+
 assert_has_cols(
   cluster_raw,
   c(
@@ -45,6 +49,7 @@ cluster_sites <- cluster_raw %>%
     year = as.integer(year),
     cluster_id = as.character(cluster_id),
     ov = as.numeric(ov_score),
+    across(all_of(available_ov_score_cols), as.numeric),
     latitude = as.numeric(Latitude),
     longitude = as.numeric(Longitude),
     method = as.character(method),
@@ -81,6 +86,11 @@ cluster_year_ov <- cluster_sites %>%
   group_by(AEZ, cluster_id, year) %>%
   summarise(
     median_ov_year = median(ov, na.rm = TRUE),
+    across(
+      all_of(available_ov_score_cols),
+      ~ median(.x, na.rm = TRUE),
+      .names = "median_{.col}_year"
+    ),
     n_sites_year = n(),
     .groups = "drop"
   ) %>%

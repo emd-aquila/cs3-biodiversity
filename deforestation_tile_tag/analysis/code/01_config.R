@@ -9,12 +9,35 @@
 # Workflows to run when sourcing run_analysis.R; wrappers can override this option to run a subset.
 analysis_modes_to_run <- getOption("defor_analysis_modes", c("ov_year_pair", "ov_whole_cluster"))
 
-# buffers to analyze from the canonical build outputs
-buffer_km_focus <- c(1, 5, 10)
+ov_score_cols <- c(
+  "ov_score",
+  "ov_obs_only",
+  "ov_no_HQI",
+  "ov_no_HANPP",
+  "ov_no_MSA",
+  "ov_no_PD",
+  "ov_no_Shannon"
+)
 
-# clustering method and radius combinations to analyze
-cluster_methods <- c("clara", "greedy_cover", "pam")
-cluster_radius_km_vals <- c(10.0, 12.5, 17.5, 20.0, 25.0)
+ov_score_specs <- tibble::tribble(
+  ~ov_method,        ~site_col,        ~cluster_year_col,              ~t1_col,             ~t2_col,             ~delta_col,               ~annualized_col,
+  "ov_full",         "ov_score",       "median_ov_year",              "ov_t1",             "ov_t2",             "delta_ov",               "delta_ov_annualized",
+  "ov_obs_only",     "ov_obs_only",    "median_ov_obs_only_year",     "ov_obs_only_t1",    "ov_obs_only_t2",    "delta_ov_obs_only",      "delta_ov_obs_only_annualized",
+  "ov_no_hqi",       "ov_no_HQI",      "median_ov_no_HQI_year",       "ov_no_HQI_t1",      "ov_no_HQI_t2",      "delta_ov_no_HQI",        "delta_ov_no_HQI_annualized",
+  "ov_no_hanpp",     "ov_no_HANPP",    "median_ov_no_HANPP_year",     "ov_no_HANPP_t1",    "ov_no_HANPP_t2",    "delta_ov_no_HANPP",      "delta_ov_no_HANPP_annualized",
+  "ov_no_msa",       "ov_no_MSA",      "median_ov_no_MSA_year",       "ov_no_MSA_t1",      "ov_no_MSA_t2",      "delta_ov_no_MSA",        "delta_ov_no_MSA_annualized",
+  "ov_no_pd",        "ov_no_PD",       "median_ov_no_PD_year",        "ov_no_PD_t1",       "ov_no_PD_t2",       "delta_ov_no_PD",         "delta_ov_no_PD_annualized",
+  "ov_no_shannon",   "ov_no_Shannon",  "median_ov_no_Shannon_year",   "ov_no_Shannon_t1",  "ov_no_Shannon_t2",  "delta_ov_no_Shannon",    "delta_ov_no_Shannon_annualized"
+)
+
+# clustering method, radius, buffer combinations to analyze
+cluster_methods <- c("clara") # can choose clara, greedy_cover, pam
+# cluster_methods <- c("clara", "pam", "greedy_cover")
+
+cluster_radius_km_vals <- c(10.0) # can choose 10.0, 12.5, 17.5, 20.0, 25.0
+# cluster_radius_km_vals <- c(10.0, 12.5, 17.5, 20.0, 25.0)
+
+buffer_km_focus <- c(1, 5, 10) # can choose 1, 5, 10
 
 cluster_run_grid <- crossing(
   cluster_method = cluster_methods,

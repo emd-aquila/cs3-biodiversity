@@ -20,19 +20,39 @@ model_df <- combined_component_scores %>%
     shannon_scaled = minmax01(shannon),
     phylo_scaled = minmax01(phylo_div),
     log_msa_scaled = minmax01(log_msa),
+    hanpp_score = 0.2 * hanpphigh + 0.8 * hanpplow,
+    
     ov_score =
       hq_score +
       shannon_scaled +
       phylo_scaled +
       log_msa_scaled +
-      0.2 * hanpphigh +
-      0.8 * hanpplow
+      hanpp_score,
+    
+    ov_obs_only =
+      shannon_scaled +
+      log_msa_scaled +
+      phylo_scaled,
+    
+    ov_no_HQI = ov_score - hq_score,
+    ov_no_HANPP = ov_score - hanpp_score,
+    ov_no_MSA = ov_score - log_msa_scaled,
+    ov_no_PD = ov_score - phylo_scaled,
+    ov_no_Shannon = ov_score - shannon_scaled
   ) %>%
   select(
     sample_id, Latitude, Longitude, Sample_midpoint,
     hanpp, msa, hq_score, shannon, phylo_div,
-    hanpphigh, hanpplow, log_msa,
-    shannon_scaled, phylo_scaled, log_msa_scaled, ov_score
+    hanpphigh, hanpplow, hanpp_score, log_msa,
+    shannon_scaled, phylo_scaled, log_msa_scaled,
+    ov_score, ov_obs_only,
+    ov_no_HQI, ov_no_HANPP, ov_no_MSA, ov_no_PD, ov_no_Shannon
+  ) %>%
+  mutate(
+    across(
+      where(is.numeric) & !any_of(c("Latitude", "Longitude")),
+      ~ round(.x, 3)
+    )
   )
 
 write_csv_safe(model_df, file.path(tmp_dir, "ov_scores_sitelevel.csv"))
