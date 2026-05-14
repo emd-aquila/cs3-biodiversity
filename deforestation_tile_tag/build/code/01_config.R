@@ -60,13 +60,25 @@ defor_spatial_file <- file.path(defor_spatial_dir,"deforestation_50km.shp")
 defor_tabular_dir <- file.path("..", "..", "..", "spatial_data", "deforestation", "tabular")
 defor_tabular_file <- file.path(defor_tabular_dir, "deforestation_data_summarized.csv")
 
+country_boundaries_dir <- file.path(
+  "..",
+  "..",
+  "..",
+  "spatial_data",
+  "naturalearth_10m_admin_0_countries"
+)
+country_boundaries_file <- file.path(
+  country_boundaries_dir,
+  "ne_10m_admin_0_countries.shp"
+)
+
 cluster_dir <- file.path("..", "..", "..", "cluster", "output")
 
 # -----------------------
 # Cache files that are slow to rebuild because large
 # -----------------------
 
-defor_tiles_cache <- file.path(build_tmp_dir, "defor_tiles_sf_v2.rds")
+defor_tiles_cache <- file.path(build_tmp_dir, "defor_tiles_sf_v3.rds")
 
 # -----------------------
 # Helper for run-specific paths

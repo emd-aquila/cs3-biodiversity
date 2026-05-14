@@ -24,9 +24,9 @@ assert_has_cols(
   "regression_data"
 )
 
-message("Regression sample rows: ", nrow(regression_data))
-message("Unique groups in regression sample: ", n_distinct(regression_data$group_value))
-message("Current run: ", current_run_label)
+log_verbose("Regression sample rows: ", nrow(regression_data))
+log_verbose("Unique groups in regression sample: ", n_distinct(regression_data$group_value))
+log_verbose("Current run: ", current_run_label)
 
 # -----------------------------------------------------
 # Output directories by transform
@@ -41,30 +41,30 @@ current_defor_label <- defor_approach_specs[[current_defor_approach]]$label
 # -----------------------------------------------------
 
 transform_preparation_specs <- list(
-  raw = list(
+  defor_raw = list(
     regressor_col = "delta_defor_ha",
-    variant_label = paste0(current_defor_label, " | raw")
+    variant_label = paste0(current_defor_label, " | raw ∆")
   ),
-  log1p = list(
+  defor_log1p = list(
     regressor_col = "log1p_delta_defor_ha",
-    variant_label = paste0(current_defor_label, " | log1p")
+    variant_label = paste0(current_defor_label, " | log1p ∆")
   ),
-  p90 = list(
+  defor_p90_trimmed = list(
     regressor_col = "delta_defor_ha",
-    variant_label = paste0(current_defor_label, " | p90 trim")
+    variant_label = paste0(current_defor_label, " | p90-trimmed ∆")
   )
-  # winsorized = list(
-  #   regressor_col = "delta_defor_ha",
-  #   variant_label = paste0(current_defor_label, " | winsorized")
-  # )
 )
+transform_preparation_specs <- transform_preparation_specs[defor_transforms]
 
-regression_data_by_transform <- list(
-  raw = regression_data,
-  log1p = regression_data,
-  p90 = p90_trim(regression_data, threshold = winsorization_threshold)
-  # winsorized = winsorize(regression_data, threshold = winsorization_threshold)
-)
+regression_data_by_transform <- purrr::map(
+  defor_transforms,
+  ~ if (identical(.x, "defor_p90_trimmed")) {
+    p90_trim(regression_data)
+  } else {
+    regression_data
+  }
+) |>
+  rlang::set_names(defor_transforms)
 
 prepared_by_transform <- purrr::imap(
   transform_preparation_specs,
@@ -79,35 +79,33 @@ prepared_by_transform <- purrr::imap(
 # Fit models
 # -----------------------------------------------------
 
-model_family_label <- dplyr::case_when(
-  identical(current_regression_model_family, "ols") ~ "OLS",
-  identical(current_regression_model_family, "robust_linear") ~ "Robust Linear",
-  identical(current_regression_model_family, "polynomial") ~ "Polynomial",
-  identical(current_regression_model_family, "getwdw_spline") ~ "GAM/Spline",
-  TRUE ~ current_regression_model_family
+regression_model_label <- dplyr::case_when(
+  identical(current_regression_model, "ols") ~ "OLS",
+  identical(current_regression_model, "robust_linear") ~ "Robust Linear",
+  identical(current_regression_model, "polynomial") ~ "Polynomial",
+  identical(current_regression_model, "gam_spline") ~ "GAM/Spline",
+  TRUE ~ current_regression_model
 )
 
 transform_model_specs <- purrr::imap(
   transform_preparation_specs,
   ~ list(
     prepared_transform = .y,
-    fit_kind = current_regression_model_family,
+    fit_kind = current_regression_model,
     variant_label = .x$variant_label,
-    model_filename = paste0(current_regression_model_family, ".rds"),
-    table_filename = paste0(current_regression_model_family, ".html"),
+    model_filename = paste0(current_regression_model, ".rds"),
+    table_filename = paste0(current_regression_model, ".html"),
     table_title = paste0(
       stringr::str_to_title(current_group_label),
       "-Specific ",
-      model_family_label,
+      regression_model_label,
       " | ",
       .x$variant_label
     ),
     plot_title = paste0(
       stringr::str_to_title(current_group_label),
-      "-Specific ",
-      model_family_label,
       " | ",
-      .x$variant_label
+      regression_model_label
     )
   )
 )
@@ -171,5 +169,5 @@ if (isTRUE(write_model_tables)) {
   )
 }
 
-message("Finished 04_ols_regression.R")
-message("  current run: ", current_run_label)
+log_verbose("Finished 04_ols_regression.R")
+log_verbose("  current run: ", current_run_label)

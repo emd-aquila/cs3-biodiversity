@@ -8,10 +8,13 @@ required_objects <- c(
   "current_output_dirs",
   "ov_score_specs",
   "cluster_year_ov",
+  "cluster_sites",
   "cluster_buffer_all",
   "cluster_buffer_tile_all",
+  "cluster_buffer_country_all",
   "cluster_buffer_year_defor_all",
-  "cluster_medoids"
+  "cluster_medoids",
+  "defor_tile_year"
 )
 
 missing_objects <- required_objects[!vapply(required_objects, exists, logical(1))]
@@ -43,18 +46,6 @@ compute_lagged_interval_end <- function(interval_start_year, interval_end_year, 
 }
 
 # -----------------------
-# Cluster first-to-last intervals
-# One row per cluster with at least two observed years.
-# -----------------------
-
-available_ov_score_specs <- get_available_ov_score_specs(cluster_year_ov)
-cluster_year_pairs <- build_whole_cluster_ov_table(cluster_year_ov, available_ov_score_specs)
-ov_variant_transition_cols <- available_ov_score_specs %>%
-  filter(ov_method != "ov_full") %>%
-  select(t1_col, t2_col, delta_col, annualized_col) %>%
-  unlist(use.names = FALSE)
-
-# -----------------------
 # Filter current-run canonical tables to current buffer
 # -----------------------
 
@@ -62,6 +53,9 @@ cluster_buffer_this <- cluster_buffer_all %>%
   filter(buffer_km == current_buffer_km)
 
 cluster_buffer_tile_this <- cluster_buffer_tile_all %>%
+  filter(buffer_km == current_buffer_km)
+
+cluster_buffer_country_this <- cluster_buffer_country_all %>%
   filter(buffer_km == current_buffer_km)
 
 cluster_buffer_year_defor_this <- cluster_buffer_year_defor_all %>%
@@ -79,14 +73,19 @@ if (nrow(cluster_buffer_this) == 0) {
   )
 
   cluster_buffer_meta <- tibble()
-  cluster_pairs_tagged_ha <- tibble()
-  interval_defor_tagged_ha <- tibble()
+  cluster_pairs_tagged_defor <- tibble()
+  interval_defor_tagged_defor <- tibble()
   cluster_deltas <- tibble()
   cluster_year_panel <- tibble()
   cluster_tile_coverage <- tibble()
   cluster_tag_status <- tibble()
   clusters_tagged_any_tile <- tibble()
   clusters_tagged_ha_tile <- tibble()
+  analysis_unit_membership <- tibble()
+  analysis_unit_summary <- tibble()
+  analysis_unit_sites_this <- cluster_sites[0, ]
+  analysis_unit_year_ov_this <- tibble()
+  cluster_country_coverage <- tibble()
 
   write_csv_safe(
     round_numeric_cols(cluster_year_panel, digits = 3),
@@ -98,44 +97,70 @@ if (nrow(cluster_buffer_this) == 0) {
     file.path(current_output_dirs$tmp_dir, "cluster_tile_coverage.csv")
   )
 
+  write_csv_safe(
+    round_numeric_cols(cluster_country_coverage, digits = 3),
+    file.path(current_output_dirs$tmp_dir, "cluster_country_coverage.csv")
+  )
+
   message("Finished 05_build_transition_tables.R for empty buffer: ", current_buffer_km)
 } else {
 
   # -----------------------
   # Cluster-level tagging / footprint metadata
+  # One row per AEZ-analysis-unit-buffer.
+  # Exclusive single-tile clusters are collapsed here before OV medians
+  # and deltas are calculated.
   # -----------------------
 
-  cluster_buffer_meta <- cluster_buffer_this %>%
-    st_drop_geometry() %>%
-    distinct(
-      AEZ,
-      cluster_id,
-      buffer_km,
-      n_sites,
-      n_matched_tiles,
-      n_matched_tiles_with_ha,
-      n_matched_tiles_missing_ha,
-      tagged_any_tile,
-      tagged_ha_tile
-    )
+  analysis_unit_tables <- build_analysis_unit_tables(
+    cluster_sites = cluster_sites,
+    cluster_buffer_this = cluster_buffer_this,
+    cluster_buffer_tile_this = cluster_buffer_tile_this,
+    cluster_buffer_country_this = cluster_buffer_country_this,
+    cluster_buffer_year_defor_this = cluster_buffer_year_defor_this,
+    cluster_medoids = cluster_medoids,
+    defor_tile_year = defor_tile_year,
+    ov_score_specs = ov_score_specs,
+    collapse_single_tile_clusters = collapse_single_tile_clusters
+  )
+
+  analysis_unit_membership <- analysis_unit_tables$membership
+  analysis_unit_summary <- analysis_unit_tables$summary
+  analysis_unit_sites_this <- analysis_unit_tables$cluster_sites
+  analysis_unit_year_ov_this <- analysis_unit_tables$cluster_year_ov
+  cluster_buffer_meta <- analysis_unit_tables$cluster_buffer_meta
+  cluster_buffer_tile_this <- analysis_unit_tables$cluster_buffer_tile
+  cluster_buffer_country_this <- analysis_unit_tables$cluster_buffer_country
+  cluster_buffer_year_defor_this <- analysis_unit_tables$cluster_buffer_year_defor
+  cluster_medoids_this <- analysis_unit_tables$cluster_medoids
+
+  available_ov_score_specs <- get_available_ov_score_specs(analysis_unit_year_ov_this)
+  cluster_year_pairs <- build_whole_cluster_ov_table(analysis_unit_year_ov_this, available_ov_score_specs)
+  ov_variant_transition_cols <- available_ov_score_specs %>%
+    filter(ov_method != "ov_full") %>%
+    select(t1_col, t2_col, delta_col, annualized_col) %>%
+    unlist(use.names = FALSE)
 
   assert_has_cols(
     cluster_buffer_meta,
     c(
       "AEZ", "cluster_id", "buffer_km",
-      "n_matched_tiles_with_ha", "tagged_ha_tile"
+      "n_matched_tiles", "tagged_any_tile",
+      "n_matched_tiles_with_ha", "tagged_ha_tile",
+      "n_matched_countries", "primary_country_id", "primary_country_name"
     ),
     paste0("cluster_buffer_meta_", current_buffer_key)
   )
 
   # -----------------------
-  # Restrict to clusters tagged to >=1 ha tile
+  # Restrict to clusters tagged to >=1 deforestation tile.
+  # Tiles without hectare rows are valid zero-deforestation tiles.
   # -----------------------
 
-  cluster_pairs_tagged_ha <- cluster_year_pairs %>%
+  cluster_pairs_tagged_defor <- cluster_year_pairs %>%
     inner_join(
       cluster_buffer_meta %>%
-        filter(tagged_ha_tile, n_matched_tiles_with_ha > 0),
+        filter(tagged_any_tile, n_matched_tiles > 0),
       by = c("AEZ", "cluster_id")
     )
 
@@ -143,7 +168,7 @@ if (nrow(cluster_buffer_this) == 0) {
   # Deforestation accumulated from first through last observed year
   # -----------------------
 
-  interval_defor_tagged_ha <- cluster_pairs_tagged_ha %>%
+  interval_defor_tagged_defor <- cluster_pairs_tagged_defor %>%
     mutate(
       lagged_year_end = compute_lagged_interval_end(year_start, year_final, year_gap)
     ) %>%
@@ -196,13 +221,13 @@ if (nrow(cluster_buffer_this) == 0) {
   # Regression-ready cluster deltas
   # -----------------------
 
-  cluster_deltas <- cluster_pairs_tagged_ha %>%
+  cluster_deltas <- cluster_pairs_tagged_defor %>%
     left_join(
-      interval_defor_tagged_ha,
+      interval_defor_tagged_defor,
       by = c("AEZ", "cluster_id", "buffer_km", "year_start", "year_final")
     ) %>%
     left_join(
-      cluster_medoids %>%
+      cluster_medoids_this %>%
         dplyr::select(AEZ, cluster_id, medoid_latitude, medoid_longitude),
       by = c("AEZ", "cluster_id")
     ) %>%
@@ -222,7 +247,22 @@ if (nrow(cluster_buffer_this) == 0) {
       buffer_km,
       medoid_latitude,
       medoid_longitude,
+      n_matched_tiles,
       n_matched_tiles_with_ha,
+      n_matched_countries,
+      primary_country_id,
+      primary_country_iso3,
+      primary_country_name,
+      primary_country_name_long,
+      primary_sovereign_name,
+      primary_country_overlap_share,
+      matched_country_ids,
+      matched_country_names,
+      analysis_unit_id = cluster_id,
+      analysis_unit_type,
+      collapse_tile_id,
+      n_member_clusters,
+      member_cluster_ids,
       n_defor_years,
       n_defor_years_lagged,
       year_start,
@@ -258,7 +298,8 @@ if (nrow(cluster_buffer_this) == 0) {
     c(
       "AEZ", "cluster_id", "buffer_km",
       "medoid_latitude", "medoid_longitude",
-      "n_matched_tiles_with_ha",
+      "n_matched_tiles", "n_matched_tiles_with_ha",
+      "n_matched_countries", "primary_country_id", "primary_country_name",
       "n_defor_years", "n_defor_years_lagged",
       "year_start", "year_final", "year_gap",
       "ov_start", "ov_final", "delta_ov", "delta_ov_annualized",
@@ -280,7 +321,7 @@ if (nrow(cluster_buffer_this) == 0) {
 
   cluster_year_panel <- cluster_buffer_year_defor_this %>%
     left_join(
-      cluster_year_ov %>%
+      analysis_unit_year_ov_this %>%
         dplyr::select(
           AEZ,
           cluster_id,
@@ -308,9 +349,20 @@ if (nrow(cluster_buffer_this) == 0) {
       n_tiles_with_any_ha_info = sum(has_ha_info, na.rm = TRUE),
       matched_area_ha = sum(intersection_area_ha, na.rm = TRUE),
       overlap_share_sum = sum(normalized_overlap_share, na.rm = TRUE),
+      analysis_unit_type = dplyr::first(analysis_unit_type),
+      collapse_tile_id = dplyr::first(collapse_tile_id),
       .groups = "drop"
     ) %>%
     arrange(AEZ, cluster_id)
+
+  cluster_country_coverage <- cluster_buffer_country_this %>%
+    arrange(
+      AEZ,
+      cluster_id,
+      buffer_km,
+      desc(normalized_country_overlap_share),
+      country_name
+    )
 
   # -----------------------
   # Cluster subsets for tagging diagnostics
@@ -337,6 +389,21 @@ if (nrow(cluster_buffer_this) == 0) {
   write_csv_safe(
     cluster_tile_coverage,
     file.path(current_output_dirs$tmp_dir, "cluster_tile_coverage.csv")
+  )
+
+  write_csv_safe(
+    cluster_country_coverage,
+    file.path(current_output_dirs$tmp_dir, "cluster_country_coverage.csv")
+  )
+
+  write_csv_safe(
+    analysis_unit_membership,
+    file.path(current_output_dirs$tmp_dir, "analysis_unit_membership.csv")
+  )
+
+  write_csv_safe(
+    analysis_unit_summary,
+    file.path(current_output_dirs$tmp_dir, "analysis_unit_summary.csv")
   )
 
   message("Finished 05_build_transition_tables.R")

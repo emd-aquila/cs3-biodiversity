@@ -8,6 +8,10 @@
 
 # Workflows to run when sourcing run_analysis.R; wrappers can override this option to run a subset.
 analysis_modes_to_run <- getOption("defor_analysis_modes", c("ov_year_pair", "ov_whole_cluster"))
+single_tile_collapse_modes_to_run <- getOption(
+  "defor_single_tile_collapse_modes",
+  c("collapse_on", "collapse_off")
+)
 
 ov_score_cols <- c(
   "ov_score",
@@ -38,6 +42,22 @@ cluster_radius_km_vals <- c(10.0) # can choose 10.0, 12.5, 17.5, 20.0, 25.0
 # cluster_radius_km_vals <- c(10.0, 12.5, 17.5, 20.0, 25.0)
 
 buffer_km_focus <- c(1, 5, 10) # can choose 1, 5, 10
+
+single_tile_collapse_mode_specs <- list(
+  collapse_on = list(
+    output_dir = "collapse_on",
+    collapse_single_tile_clusters = TRUE,
+    label = "single-tile collapse on"
+  ),
+  collapse_off = list(
+    output_dir = "collapse_off",
+    collapse_single_tile_clusters = FALSE,
+    label = "single-tile collapse off"
+  )
+)
+
+# Current default. run_analysis.R will set this for each paired output mode.
+collapse_single_tile_clusters <- TRUE
 
 cluster_run_grid <- crossing(
   cluster_method = cluster_methods,
@@ -98,6 +118,41 @@ validate_analysis_mode <- function(analysis_mode) {
 
 walk(analysis_modes_to_run, validate_analysis_mode)
 
+validate_single_tile_collapse_mode <- function(single_tile_collapse_mode) {
+  valid_modes <- names(single_tile_collapse_mode_specs)
+  if (!single_tile_collapse_mode %in% valid_modes) {
+    stop(
+      "Unknown single_tile_collapse_mode: ",
+      single_tile_collapse_mode,
+      ". Valid modes are: ",
+      paste(valid_modes, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+walk(single_tile_collapse_modes_to_run, validate_single_tile_collapse_mode)
+
+set_single_tile_collapse_mode <- function(single_tile_collapse_mode) {
+  validate_single_tile_collapse_mode(single_tile_collapse_mode)
+
+  spec <- single_tile_collapse_mode_specs[[single_tile_collapse_mode]]
+
+  current_single_tile_collapse_mode <<- single_tile_collapse_mode
+  current_single_tile_collapse_output_dir <<- spec$output_dir
+  current_single_tile_collapse_label <<- spec$label
+  collapse_single_tile_clusters <<- spec$collapse_single_tile_clusters
+
+  invisible(
+    list(
+      current_single_tile_collapse_mode = current_single_tile_collapse_mode,
+      current_single_tile_collapse_output_dir = current_single_tile_collapse_output_dir,
+      current_single_tile_collapse_label = current_single_tile_collapse_label,
+      collapse_single_tile_clusters = collapse_single_tile_clusters
+    )
+  )
+}
+
 set_analysis_mode_paths <- function(analysis_mode) {
   validate_analysis_mode(analysis_mode)
 
@@ -142,22 +197,28 @@ set_analysis_run_paths <- function(cluster_method, cluster_radius_km) {
 # Buffer-run path setter
 # -----------------------
 
-# Build output folders in the order cluster method -> radius -> buffer -> delta-OV approach.
+# Build output folders in the order cluster method -> radius -> buffer ->
+# delta-OV approach -> single-tile collapse mode.
 build_analysis_output_dirs <- function(buffer_km,
                                        analysis_mode = current_ov_approach,
+                                       single_tile_collapse_mode = current_single_tile_collapse_mode,
                                        cluster_method = current_cluster_method,
                                        cluster_radius_km = current_cluster_radius_km,
                                        base_dir = analysis_output_root_dir) {
+  validate_single_tile_collapse_mode(single_tile_collapse_mode)
+
   cluster_method_dir <- cluster_method
   cluster_radius_dir <- paste0("radius_", sprintf("%.1fkm", cluster_radius_km))
   buffer_dir <- buffer_dir_name(buffer_km)
   analysis_mode_dir <- analysis_mode
+  single_tile_collapse_dir <- single_tile_collapse_mode_specs[[single_tile_collapse_mode]]$output_dir
   run_dir <- file.path(
     base_dir,
     cluster_method_dir,
     cluster_radius_dir,
     buffer_dir,
-    analysis_mode_dir
+    analysis_mode_dir,
+    single_tile_collapse_dir
   )
 
   list(
@@ -165,6 +226,7 @@ build_analysis_output_dirs <- function(buffer_km,
     cluster_radius_dir = cluster_radius_dir,
     buffer_dir = buffer_dir,
     analysis_mode_dir = analysis_mode_dir,
+    single_tile_collapse_dir = single_tile_collapse_dir,
     run_dir = run_dir,
     tables_dir = file.path(run_dir, "tables"),
     figures_dir = file.path(run_dir, "figures"),
@@ -179,6 +241,7 @@ set_buffer_output_dirs <- function(buffer_km, cluster_stub = current_cluster_stu
   current_output_dirs <<- build_analysis_output_dirs(
     buffer_km = buffer_km,
     analysis_mode = current_ov_approach,
+    single_tile_collapse_mode = current_single_tile_collapse_mode,
     cluster_method = current_cluster_method,
     cluster_radius_km = current_cluster_radius_km,
     base_dir = analysis_output_dir
@@ -203,6 +266,10 @@ set_buffer_output_dirs <- function(buffer_km, cluster_stub = current_cluster_stu
 current_ov_approach <- NA_character_
 analysis_output_dir <- NULL
 analysis_tmp_dir <- NULL
+
+current_single_tile_collapse_mode <- "collapse_on"
+current_single_tile_collapse_output_dir <- "collapse_on"
+current_single_tile_collapse_label <- "single-tile collapse on"
 
 current_cluster_method <- NA_character_
 current_cluster_radius_km <- NA_real_

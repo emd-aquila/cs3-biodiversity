@@ -46,13 +46,25 @@ ov_trend_colors <- c(
   ov_up   = "forestgreen"
 )
 
+figure_cluster_year_ov <- if (exists("analysis_unit_year_ov_this")) {
+  analysis_unit_year_ov_this
+} else {
+  cluster_year_ov
+}
+
+figure_cluster_sites <- if (exists("analysis_unit_sites_this")) {
+  analysis_unit_sites_this
+} else {
+  cluster_sites
+}
+
 # -----------------------
 # Build first-to-last OV trend by cluster
 # This is not buffer-dependent within a cluster run,
 # but is joined to current-buffer tagging status below.
 # -----------------------
 
-cluster_ov_trend <- cluster_year_ov %>%
+cluster_ov_trend <- figure_cluster_year_ov %>%
   arrange(AEZ, cluster_id, year) %>%
   group_by(AEZ, cluster_id) %>%
   summarise(
@@ -95,7 +107,7 @@ if (nrow(cluster_tag_status) == 0 || nrow(aez_summary) == 0) {
   # Use site nearest the medoid
   # -----------------------
   
-  cluster_points <- cluster_sites %>%
+  cluster_points <- figure_cluster_sites %>%
     arrange(AEZ, cluster_id, dist_to_medoid) %>%
     group_by(AEZ, cluster_id) %>%
     slice(1) %>%
@@ -211,21 +223,21 @@ if (nrow(cluster_tag_status) == 0 || nrow(aez_summary) == 0) {
   
   cluster_tag_plot <- aez_summary %>%
     mutate(
-      pct_tagged_to_ha_tile = dplyr::if_else(
+      pct_tagged_to_defor_tile = dplyr::if_else(
         total_clusters > 0,
-        100 * clusters_tagged_to_ha_tile / total_clusters,
+        100 * clusters_tagged_to_defor_tile / total_clusters,
         0
       )
     )
   
   plot_tagging_rate <- ggplot(
     cluster_tag_plot,
-    aes(x = AEZ, y = pct_tagged_to_ha_tile, group = 1)
+    aes(x = AEZ, y = pct_tagged_to_defor_tile, group = 1)
   ) +
     geom_line() +
     geom_point() +
     labs(
-      title = "Clusters tagged to ha tiles",
+      title = "Clusters tagged to deforestation tiles",
       subtitle = paste("Buffer =", current_buffer_km, "km"),
       x = "AEZ",
       y = "% tagged"

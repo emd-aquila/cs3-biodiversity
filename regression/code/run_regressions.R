@@ -3,89 +3,108 @@
 # =====================================================
 
 message("Starting regression pipeline...")
-message("Working directory: ", getwd())
+log_start_time <- Sys.time()
 
-message("Sourcing 00_libraries.R")
 source("00_libraries.R")
-
-message("Sourcing 01_config.R")
 source("01_config.R")
-
-message("Sourcing 02_helpers.R")
 source("02_helpers.R")
 
-for (regression_scale in regression_scales) {
-  set_regression_scale(regression_scale)
+total_base_runs <- length(regression_groups) *
+  length(annualization_modes) *
+  length(defor_bins) *
+  length(delta_ov_approaches) *
+  length(single_tile_collapse_modes) *
+  length(ov_calculation_methods) *
+  length(ov_change_modes) *
+  length(defor_approach_specs) *
+  length(regression_models) *
+  nrow(regression_run_grid)
 
-  for (grouping_level in regression_grouping_levels) {
-    set_regression_grouping_level(grouping_level)
+run_counter <- 0L
+message("Configured base runs: ", total_base_runs)
+message("Deforestation transforms per base run: ", length(defor_transforms))
+message("Regression fit plots: ", write_regression_plots)
+message("Histogram plots: ", write_histogram_plots)
+message("Run README: ", write_output_readme())
 
-    for (ov_calculation_method in ov_calculation_methods) {
-      set_ov_calculation_method(ov_calculation_method)
+for (regression_group in regression_groups) {
+  set_regression_group(regression_group)
 
-      for (defor_exposure_mode in defor_exposure_modes) {
-        set_defor_exposure_mode(defor_exposure_mode)
+  for (annualization_mode in annualization_modes) {
+    set_annualization_mode(annualization_mode)
 
-        for (ov_approach in ov_approaches) {
-          set_delta_ov_approach(ov_approach)
+      for (defor_bin in defor_bins) {
+        set_defor_bin(defor_bin)
 
-          message("\n######################################")
-          message(
+        for (delta_ov_approach in delta_ov_approaches) {
+          set_delta_ov_approach(delta_ov_approach)
+
+          for (single_tile_collapse_mode in single_tile_collapse_modes) {
+            set_single_tile_collapse_mode(single_tile_collapse_mode)
+
+            for (ov_calculation_method in ov_calculation_methods) {
+              set_ov_calculation_method(ov_calculation_method)
+
+              for (ov_change_mode in ov_change_modes) {
+                set_ov_change_mode(ov_change_mode)
+
+          log_verbose("\n######################################")
+          log_verbose(
             "Running regression workflow: ",
-            current_regression_scale,
+            current_regression_group,
             " / ",
-            current_grouping_level,
+            current_annualization_mode,
+            " / ",
+            current_defor_bin,
+            " / ",
+            current_delta_ov_approach,
+            " / ",
+            current_single_tile_collapse_mode,
             " / ",
             current_ov_calculation_method,
             " / ",
-            current_defor_exposure_mode,
-            " / ",
-            current_ov_approach
+            current_ov_change_mode
           )
-          message("Analysis input root: ", analysis_output_dir_current)
-          message(
-            "Regression output root: ",
-            file.path(
-              output_dir,
-              regression_grouping_specs[[current_grouping_level]]$output_dir,
-              ov_calculation_specs[[current_ov_calculation_method]]$output_dir,
-              defor_exposure_mode_specs[[current_defor_exposure_mode]]$output_dir,
-              current_regression_scale,
-              current_ov_approach
-            )
-          )
-          message("######################################")
+          log_verbose("Analysis input root: ", analysis_output_dir_current)
+          log_verbose("Regression output root: ", output_dir)
+          log_verbose("######################################")
 
-          for (defor_approach in defor_approaches) {
+          for (defor_approach in names(defor_approach_specs)) {
             set_defor_approach(defor_approach)
 
-            for (model_family in regression_model_families) {
-              set_regression_model_family(model_family)
+            for (regression_model in regression_models) {
+              set_regression_model(regression_model)
 
               for (i in seq_len(nrow(regression_run_grid))) {
                 cluster_method_i <- regression_run_grid$cluster_method[i]
                 cluster_radius_km_i <- regression_run_grid$cluster_radius_km[i]
                 buffer_km_i <- regression_run_grid$buffer_km[i]
 
-                message("\n======================================")
-                message("Running regression spec:")
-                message("  regression_scale: ", current_regression_scale)
-                message("  grouping_level: ", current_grouping_level)
-                message("  group_col: ", current_group_col)
-                message("  ov_calculation_method: ", current_ov_calculation_method)
-                message("  ov_delta_source_col: ", current_delta_ov_source_col)
-                message("  defor_exposure_mode: ", current_defor_exposure_mode)
-                message("  ov_approach: ", current_ov_approach)
-                message("  defor_approach: ", current_defor_approach)
-                message("  defor_summing: ", current_defor_summing)
-                message("  defor_data_type: ", current_defor_data_type)
-                message("  defor_source_col: ", current_defor_source_col)
-                message("  model_family: ", current_regression_model_family)
-                message("  cluster_method: ", cluster_method_i)
-                message("  cluster_radius_km: ", sprintf("%.1f", cluster_radius_km_i))
-                message("  buffer_km: ", buffer_km_i)
-                message("  defor_transforms: ", paste(defor_transforms, collapse = ", "))
-                message("======================================")
+                log_verbose("\n======================================")
+                log_verbose("Running regression spec:")
+                log_verbose("  annualization_mode: ", current_annualization_mode)
+                log_verbose("  regression_group: ", current_regression_group)
+                log_verbose("  group_col: ", current_group_col)
+                log_verbose("  ov_calculation_method: ", current_ov_calculation_method)
+                log_verbose("  ov_delta_source_col: ", current_delta_ov_source_col)
+                log_verbose("  defor_bin: ", current_defor_bin)
+                log_verbose("  delta_ov_approach: ", current_delta_ov_approach)
+                log_verbose("  single_tile_collapse_mode: ", current_single_tile_collapse_mode)
+                log_verbose("  ov_change_mode: ", current_ov_change_mode)
+                log_verbose("  starting_ov_source_col: ", current_starting_ov_source_col)
+                log_verbose(
+                  "  ov_threshold: ",
+                  ifelse(is.na(current_ov_threshold), "none", current_ov_threshold)
+                )
+                log_verbose("  defor_approach: ", current_defor_approach)
+                log_verbose("  defor_tile_sum: ", current_defor_tile_sum)
+                log_verbose("  defor_source_col: ", current_defor_source_col)
+                log_verbose("  regression_model: ", current_regression_model)
+                log_verbose("  cluster_method: ", cluster_method_i)
+                log_verbose("  cluster_radius_km: ", sprintf("%.1f", cluster_radius_km_i))
+                log_verbose("  buffer_km: ", buffer_km_i)
+                log_verbose("  defor_transforms: ", paste(defor_transforms, collapse = ", "))
+                log_verbose("======================================")
 
                 set_regression_run_paths(
                   cluster_method = cluster_method_i,
@@ -93,20 +112,37 @@ for (regression_scale in regression_scales) {
                   buffer_km = buffer_km_i
                 )
 
-                message("Current cluster_deltas path: ", cluster_deltas_path)
+                run_counter <- run_counter + 1L
+                message(
+                  sprintf("[%03d/%03d] ", run_counter, total_base_runs),
+                  paste(
+                    c(
+                      current_regression_group,
+                      paste0("buf_", current_buffer_km, "km"),
+                      current_delta_ov_approach,
+                      current_ov_calculation_method,
+                      current_ov_change_mode,
+                      current_defor_tile_sum
+                    ),
+                    collapse = " | "
+                  )
+                )
 
-                message("Sourcing 03_load_data.R")
+                log_verbose("Current cluster_deltas path: ", cluster_deltas_path)
+                log_verbose("Sourcing 03_load_data.R")
                 source("03_load_data.R")
 
-                message("Sourcing 04_regression.R")
+                log_verbose("Sourcing 04_regression.R")
                 source("04_regression.R")
 
-                message("Sourcing 05_diagnostics.R")
+                log_verbose("Sourcing 05_diagnostics.R")
                 source("05_diagnostics.R")
               }
             }
           }
-        }
+          }
+          }
+          }
       }
     }
   }
@@ -117,43 +153,4 @@ if (isTRUE(build_master_output_report)) {
   source("06_master_output_table.R")
 }
 
-if (isTRUE(build_comparison_canvas)) {
-  message("Sourcing 07_compare_canvas.R for configured regression scales and runs")
-  for (regression_scale in regression_scales) {
-    for (i in seq_len(nrow(regression_run_grid))) {
-      canvas_regression_scale_target <- regression_scale
-      canvas_cluster_method_target <- regression_run_grid$cluster_method[i]
-      canvas_cluster_radius_km_target <- regression_run_grid$cluster_radius_km[i]
-      canvas_buffer_km_target <- regression_run_grid$buffer_km[i]
-
-      message("\n======================================")
-      message("Building comparison canvas:")
-      message("  regression_scale: ", canvas_regression_scale_target)
-      message("  cluster_method: ", canvas_cluster_method_target)
-      message("  cluster_radius_km: ", sprintf("%.1f", canvas_cluster_radius_km_target))
-      message("  buffer_km: ", canvas_buffer_km_target)
-      message("======================================")
-
-      tryCatch(
-        source("07_compare_canvas.R"),
-        error = function(e) {
-          warning(
-            "Skipping comparison canvas for ",
-            canvas_regression_scale_target,
-            " / ",
-            canvas_cluster_method_target,
-            " radius ",
-            sprintf("%.1f", canvas_cluster_radius_km_target),
-            " buffer ",
-            canvas_buffer_km_target,
-            ": ",
-            conditionMessage(e),
-            call. = FALSE
-          )
-        }
-      )
-    }
-  }
-}
-
-message("Regression pipeline complete.")
+message("Regression pipeline complete. Elapsed: ", round(difftime(Sys.time(), log_start_time, units = "mins"), 2), " minutes")

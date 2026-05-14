@@ -4,11 +4,14 @@ This project downloads PREDICTS biodiversity data, calculates an overall biodive
 
 ## Overview
 
+TO BE UPDATED!!!
+
 This repository contains three connected analysis pipelines:
 
 1. **`predicts_ov_table/`** computes biodiversity metrics and produces OV/AEZ-tagged site outputs.
 2. **`cluster/`** clusters biodiversity sampling sites across multiple methods and radii, then summarizes OV spread at cluster and AEZ levels.
 3. **`deforestation_tile_tag/`** builds canonical deforestation and cluster spatial/tabular outputs, then analyzes transitions, buffer sensitivity, and AEZ summaries.
+4. **'regression/'** takes tile_tga outputs and runs regressions between ∆OV and ∆Deforestation under various settings.
 
 Supporting spatial data are stored in **`spatial_data/`**, including AEZ boundaries, annual deforestation files, and annual canopy height data.
 

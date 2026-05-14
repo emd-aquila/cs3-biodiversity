@@ -56,31 +56,36 @@ for (analysis_mode in analysis_modes_to_run) {
     buffer_sensitivity_reports_all[[current_cluster_stub]] <- buffer_sensitivity_report_current
 
     for (buffer_km in buffer_km_focus) {
-      message("\n------------------------------")
-      message("Running buffer: ", buffer_km, " km")
-      message("------------------------------")
+      for (single_tile_collapse_mode in single_tile_collapse_modes_to_run) {
+        set_single_tile_collapse_mode(single_tile_collapse_mode)
 
-      set_buffer_output_dirs(buffer_km)
+        message("\n------------------------------")
+        message("Running buffer: ", buffer_km, " km")
+        message("Single-tile collapse mode: ", current_single_tile_collapse_mode)
+        message("------------------------------")
 
-      if (current_ov_approach == "ov_whole_cluster") {
-        message("Sourcing 05_build_transition_tables_whole_cluster.R")
-        source("05_build_transition_tables_whole_cluster.R")
+        set_buffer_output_dirs(buffer_km)
 
-        message("Sourcing 06_summarize_by_aez_whole_cluster.R")
-        source("06_summarize_by_aez_whole_cluster.R")
-      } else {
-        message("Sourcing 05_build_transition_tables_year_pair.R")
-        source("05_build_transition_tables_year_pair.R")
+        if (current_ov_approach == "ov_whole_cluster") {
+          message("Sourcing 05_build_transition_tables_whole_cluster.R")
+          source("05_build_transition_tables_whole_cluster.R")
 
-        message("Sourcing 06_summarize_by_aez_year_pair.R")
-        source("06_summarize_by_aez_year_pair.R")
+          message("Sourcing 06_summarize_by_aez_whole_cluster.R")
+          source("06_summarize_by_aez_whole_cluster.R")
+        } else {
+          message("Sourcing 05_build_transition_tables_year_pair.R")
+          source("05_build_transition_tables_year_pair.R")
+
+          message("Sourcing 06_summarize_by_aez_year_pair.R")
+          source("06_summarize_by_aez_year_pair.R")
+        }
+
+        message("Sourcing 07_make_figures.R")
+        source("07_make_figures.R")
+
+        message("Sourcing 08_write_outputs.R")
+        source("08_write_outputs.R")
       }
-
-      message("Sourcing 07_make_figures.R")
-      source("07_make_figures.R")
-
-      message("Sourcing 08_write_outputs.R")
-      source("08_write_outputs.R")
     }
   }
 

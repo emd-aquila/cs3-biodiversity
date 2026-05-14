@@ -30,6 +30,7 @@ if (length(missing_objects) > 0) {
 }
 
 run_labels_by_transform <- build_run_labels_by_transform(defor_transforms)
+plot_labels_by_transform <- build_compact_run_labels_by_transform(defor_transforms)
 
 # -----------------------------------------------------
 # Family-specific summaries
@@ -65,7 +66,7 @@ purrr::iwalk(
 # Main fitted scatterplots
 # -----------------------------------------------------
 
-if (isTRUE(write_diagnostic_plots)) {
+if (isTRUE(write_regression_plots)) {
   purrr::iwalk(
     transform_model_specs,
     ~ {
@@ -86,7 +87,7 @@ if (isTRUE(write_diagnostic_plots)) {
         ),
         output_dirs_by_transform[[.y]],
         paste0(.x$fit_kind, ".png"),
-        run_label = run_labels_by_transform[[.y]]
+        run_label = plot_labels_by_transform[[.y]]
       )
     }
   )
@@ -97,29 +98,25 @@ if (isTRUE(write_diagnostic_plots)) {
 # -----------------------------------------------------
 
 regressor_hist_specs <- list(
-  raw = list(
-    data = regression_data_by_transform[["raw"]],
+  defor_raw = list(
+    data = regression_data_by_transform[["defor_raw"]],
     x_col = "delta_defor_ha",
-    title = "Distribution of raw deforestation"
+    title = "Distribution of raw ∆ deforestation"
   ),
-  log1p = list(
-    data = regression_data_by_transform[["log1p"]],
+  defor_log1p = list(
+    data = regression_data_by_transform[["defor_log1p"]],
     x_col = "log1p_delta_defor_ha",
-    title = "Distribution of log1p deforestation"
+    title = "Distribution of log1p ∆ deforestation"
   ),
-  p90 = list(
-    data = regression_data_by_transform[["p90"]],
+  defor_p90_trimmed = list(
+    data = regression_data_by_transform[["defor_p90_trimmed"]],
     x_col = "delta_defor_ha",
-    title = "Distribution of p90 deforestation"
+    title = "Distribution of p90-trimmed ∆ deforestation"
   )
-  # winsorized = list(
-  #   data = regression_data_by_transform[["winsorized"]],
-  #   x_col = "delta_defor_ha",
-  #   title = "Distribution of winsorized deforestation"
-  # )
 )
+regressor_hist_specs <- regressor_hist_specs[defor_transforms]
 
-if (isTRUE(write_diagnostic_plots)) {
+if (isTRUE(write_histogram_plots)) {
   purrr::iwalk(
     regressor_hist_specs,
     ~ save_family_plot(
@@ -133,7 +130,7 @@ if (isTRUE(write_diagnostic_plots)) {
         theme_minimal(),
       output_dirs_by_transform[[.y]],
       "hist_regressor.png",
-      run_label = run_labels_by_transform[[.y]],
+      run_label = plot_labels_by_transform[[.y]],
       width = 8,
       height = 6
     )
@@ -142,9 +139,9 @@ if (isTRUE(write_diagnostic_plots)) {
   delta_ov_hist_plot <- ggplot(regression_data, aes(x = delta_ov)) +
     geom_histogram(bins = 40) +
     labs(
-      x = "delta_ov",
+      x = get_delta_ov_axis_label(),
       y = "Count",
-      title = "Distribution of delta_ov"
+      title = paste("Distribution of", get_delta_ov_axis_label())
     ) +
     theme_minimal()
 
@@ -153,12 +150,12 @@ if (isTRUE(write_diagnostic_plots)) {
       delta_ov_hist_plot,
       output_dirs_by_transform[[transform_name]],
       "hist_delta_ov.png",
-      run_label = build_run_label(defor_transform = transform_name),
+      run_label = build_compact_run_label(defor_transform = transform_name),
       width = 8,
       height = 6
     )
   }
 }
 
-message("Finished 05_diagnostics.R")
-message("  current run: ", current_run_label)
+log_verbose("Finished 05_diagnostics.R")
+log_verbose("  current run: ", current_run_label)

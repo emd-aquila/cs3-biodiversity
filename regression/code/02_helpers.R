@@ -2,18 +2,374 @@
 # Helper functions for regression pipeline
 # =====================================================
 
+log_verbose <- function(...) {
+  if (isTRUE(verbose_console_output)) {
+    message(...)
+  }
+}
+
+cluster_deltas_cache <- new.env(parent = emptyenv())
+
+read_cluster_deltas_cached <- function(path) {
+  assert_exists(path)
+  cache_key <- normalizePath(path, winslash = "/", mustWork = TRUE)
+
+  if (!exists(cache_key, envir = cluster_deltas_cache, inherits = FALSE)) {
+    cluster_deltas <- readr::read_csv(path, show_col_types = FALSE) %>%
+      normalize_cluster_deltas_schema()
+
+    assign(cache_key, cluster_deltas, envir = cluster_deltas_cache)
+    log_verbose("Cached cluster_deltas: ", path)
+  }
+
+  get(cache_key, envir = cluster_deltas_cache, inherits = FALSE)
+}
+
 # ------------------------------
 # Build run identifiers and directories used for a given regression
 # ------------------------------
 
 # Check that the selected OV approach is valid.
 validate_delta_ov_approach <- function(delta_ov_approach) {
-  valid_modes <- ov_approaches
+  valid_modes <- delta_ov_approaches
   
   if (!delta_ov_approach %in% valid_modes) {
     stop(
-      "Unknown ov_approach: ",
+      "Unknown delta_ov_approach: ",
       delta_ov_approach,
+      ". Valid modes are: ",
+      paste(valid_modes, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+get_annualization_mode_spec <- function(annualization_mode = current_annualization_mode) {
+  validate_annualization_mode(annualization_mode)
+  annualization_mode_specs[[annualization_mode]]
+}
+
+get_delta_ov_approach_spec <- function(delta_ov_approach = current_delta_ov_approach) {
+  validate_delta_ov_approach(delta_ov_approach)
+  delta_ov_approach_specs[[delta_ov_approach]]
+}
+
+get_defor_transform_spec <- function(defor_transform) {
+  if (is.null(defor_transform)) {
+    return(NULL)
+  }
+
+  if (!defor_transform %in% defor_transforms) {
+    stop(
+      "Unknown defor_transform: ",
+      defor_transform,
+      ". Valid transforms are: ",
+      paste(defor_transforms, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  defor_transform_specs[[defor_transform]]
+}
+
+output_hierarchy_axis_order <- c(
+  "cluster_method",
+  "cluster_radius",
+  "buffer",
+  "regression_group",
+  "annualization_mode",
+  "defor_bin",
+  "delta_ov_approach",
+  "single_tile_collapse_mode",
+  "ov_calculation_method",
+  "ov_change_mode",
+  "defor_tile_sum",
+  "regression_model",
+  "defor_transform"
+)
+
+get_output_hierarchy_axis_counts <- function() {
+  c(
+    cluster_method = length(cluster_methods),
+    cluster_radius = length(cluster_radii),
+    buffer = length(buffers),
+    regression_group = length(regression_groups),
+    annualization_mode = length(annualization_modes),
+    defor_bin = length(defor_bins),
+    delta_ov_approach = length(delta_ov_approaches),
+    single_tile_collapse_mode = length(single_tile_collapse_modes),
+    ov_calculation_method = length(ov_calculation_methods),
+    ov_change_mode = length(ov_change_modes),
+    defor_tile_sum = length(defor_tile_sum_methods),
+    regression_model = length(regression_models),
+    defor_transform = length(defor_transforms)
+  )
+}
+
+include_output_hierarchy_axis <- function(axis_name) {
+  axis_counts <- get_output_hierarchy_axis_counts()
+
+  if (!axis_name %in% names(axis_counts)) {
+    stop("Unknown output hierarchy axis: ", axis_name, call. = FALSE)
+  }
+
+  axis_counts[[axis_name]] > 1
+}
+
+build_conditional_output_path <- function(path_dirs,
+                                          through_axis,
+                                          base_dir = output_dir) {
+  if (!through_axis %in% output_hierarchy_axis_order) {
+    stop("Unknown output hierarchy endpoint: ", through_axis, call. = FALSE)
+  }
+
+  endpoint <- match(through_axis, output_hierarchy_axis_order)
+  candidate_axes <- output_hierarchy_axis_order[seq_len(endpoint)]
+  included_axes <- candidate_axes[
+    vapply(candidate_axes, include_output_hierarchy_axis, logical(1))
+  ]
+  path_parts <- unname(unlist(path_dirs[included_axes], use.names = FALSE))
+  path_parts <- path_parts[!is.na(path_parts) & nzchar(path_parts)]
+
+  if (length(path_parts) == 0) {
+    return(base_dir)
+  }
+
+  do.call(file.path, as.list(c(base_dir, path_parts)))
+}
+
+format_readme_values <- function(values) {
+  paste(values, collapse = ", ")
+}
+
+format_readme_dirs <- function(values) {
+  paste0("`", paste(values, collapse = "`, `"), "`")
+}
+
+get_output_hierarchy_axis_metadata <- function() {
+  list(
+    list(
+      axis = "cluster_method",
+      config = "cluster_methods",
+      description = "Clustering method",
+      selected = cluster_methods,
+      folders = cluster_methods
+    ),
+    list(
+      axis = "cluster_radius",
+      config = "cluster_radii",
+      description = "Clustering radius",
+      selected = paste0(sprintf("%.1f", cluster_radii), " km"),
+      folders = paste0("radius_", sprintf("%.1fkm", cluster_radii))
+    ),
+    list(
+      axis = "buffer",
+      config = "buffers",
+      description = "Cluster buffer size",
+      selected = paste0(buffers, " km"),
+      folders = paste0("buf_", buffers, "km")
+    ),
+    list(
+      axis = "regression_group",
+      config = "regression_groups",
+      description = "Grouping used for group-specific regressions",
+      selected = regression_groups,
+      folders = purrr::map_chr(regression_groups, ~ regression_group_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "annualization_mode",
+      config = "annualization_modes",
+      description = "Whether delta OV and deforestation are raw totals or annualized by year_gap",
+      selected = annualization_modes,
+      folders = purrr::map_chr(annualization_modes, ~ annualization_mode_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "defor_bin",
+      config = "defor_bins",
+      description = "Deforestation exposure window",
+      selected = defor_bins,
+      folders = purrr::map_chr(defor_bins, ~ defor_bin_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "delta_ov_approach",
+      config = "delta_ov_approaches",
+      description = "How delta OV is calculated within clusters",
+      selected = delta_ov_approaches,
+      folders = purrr::map_chr(delta_ov_approaches, ~ delta_ov_approach_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "single_tile_collapse_mode",
+      config = "single_tile_collapse_modes",
+      description = "Whether same-single-tile clusters are collapsed",
+      selected = single_tile_collapse_modes,
+      folders = purrr::map_chr(single_tile_collapse_modes, ~ single_tile_collapse_mode_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "ov_calculation_method",
+      config = "ov_calculation_methods",
+      description = "OV calculation method",
+      selected = ov_calculation_methods,
+      folders = purrr::map_chr(ov_calculation_methods, ~ ov_calculation_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "ov_change_mode",
+      config = "ov_change_modes",
+      description = "How low starting OV and percent-change outcomes are handled",
+      selected = ov_change_modes,
+      folders = purrr::map_chr(ov_change_modes, ~ ov_change_mode_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "defor_tile_sum",
+      config = "defor_tile_sum_methods",
+      description = "How tagged-tile deforestation is summarized for each cluster",
+      selected = defor_tile_sum_methods,
+      folders = purrr::map_chr(defor_tile_sum_methods, ~ defor_tile_sum_specs[[.x]]$output_dir)
+    ),
+    list(
+      axis = "regression_model",
+      config = "regression_models",
+      description = "Regression model family",
+      selected = regression_models,
+      folders = regression_models
+    ),
+    list(
+      axis = "defor_transform",
+      config = "defor_transforms",
+      description = "Deforestation regressor transformation",
+      selected = defor_transforms,
+      folders = purrr::map_chr(defor_transforms, ~ defor_transform_specs[[.x]]$output_dir)
+    )
+  )
+}
+
+write_output_readme <- function(path = file.path(output_dir, "README.md")) {
+  axis_metadata <- get_output_hierarchy_axis_metadata()
+  included_axes <- axis_metadata[
+    vapply(axis_metadata, function(axis) include_output_hierarchy_axis(axis$axis), logical(1))
+  ]
+  fixed_axes <- axis_metadata[
+    !vapply(axis_metadata, function(axis) include_output_hierarchy_axis(axis$axis), logical(1))
+  ]
+
+  included_lines <- if (length(included_axes) > 0) {
+    purrr::imap_chr(
+      included_axes,
+      ~ paste0(
+        .y,
+        ". ",
+        .x$description,
+        " (`",
+        .x$axis,
+        "`): ",
+        format_readme_dirs(.x$folders)
+      )
+    )
+  } else {
+    "No hierarchy axes have more than one selected option, so outputs are written directly under the output root."
+  }
+
+  fixed_lines <- if (length(fixed_axes) > 0) {
+    purrr::map_chr(
+      fixed_axes,
+      ~ paste0(
+        "- ",
+        .x$description,
+        " (`",
+        .x$config,
+        "`): ",
+        format_readme_values(.x$selected),
+        " [no folder level]"
+      )
+    )
+  } else {
+    "- None. Every configured hierarchy axis has more than one selected option."
+  }
+
+  selected_lines <- purrr::map_chr(
+    axis_metadata,
+    ~ paste0(
+      "- ",
+      .x$description,
+      " (`",
+      .x$config,
+      "`): ",
+      format_readme_values(.x$selected),
+      " -> folders ",
+      format_readme_dirs(.x$folders)
+    )
+  )
+
+  threshold_lines <- purrr::imap_chr(
+    ov_thresholds,
+    ~ paste0("- ", .y, ": ", .x)
+  )
+
+  lines <- c(
+    "# Regression Output README",
+    "",
+    paste0("Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
+    paste0("Output root: ", normalizePath(output_dir, winslash = "/", mustWork = FALSE)),
+    "",
+    "This directory contains regression outputs for the options selected in `regression/code/01_config.R` at run time.",
+    "Folder levels are only created for hierarchy axes with more than one selected option. Fixed single-option choices are recorded below instead of adding one-option folders.",
+    "",
+    "## Folder Hierarchy Created For This Run",
+    included_lines,
+    "",
+    "## Fixed Choices Saved Only In This README",
+    fixed_lines,
+    "",
+    "## Selected Options",
+    selected_lines,
+    "",
+    "## Starting OV Thresholds",
+    threshold_lines,
+    "",
+    "## Output Toggles",
+    paste0("- Model tables: ", write_model_tables),
+    paste0("- Regression OLS plots: ", write_regression_plots),
+    paste0("- Histogram plots: ", write_histogram_plots),
+    paste0("- Master output report: ", build_master_output_report),
+    "",
+    "## Notes",
+    "- `raw_delta` uses raw delta OV and raw deforestation totals.",
+    "- `annualized_delta` divides delta OV and deforestation by `year_gap`.",
+    "- `baseline_deforestation` uses all deforestation between the first and last delta-OV years, inclusive.",
+    "- `lagged_deforestation` uses the lagged deforestation columns produced by the upstream deforestation-tagging workflow.",
+    "- Thresholded OV-change modes remove rows where starting OV is below the configured threshold for that OV calculation method.",
+    "- Percent OV-change modes replace linear delta OV with `100 * delta_ov / starting_ov` after the selected raw or annualized delta is chosen."
+  )
+
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  writeLines(lines, path)
+  path
+}
+
+is_annualized_delta_mode <- function(annualization_mode = current_annualization_mode) {
+  identical(get_annualization_mode_spec(annualization_mode)$source_mode, "annualized")
+}
+
+validate_single_tile_collapse_mode <- function(single_tile_collapse_mode) {
+  valid_modes <- names(single_tile_collapse_mode_specs)
+
+  if (!single_tile_collapse_mode %in% valid_modes) {
+    stop(
+      "Unknown single_tile_collapse_mode: ",
+      single_tile_collapse_mode,
+      ". Valid modes are: ",
+      paste(valid_modes, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+validate_ov_change_mode <- function(ov_change_mode) {
+  valid_modes <- names(ov_change_mode_specs)
+
+  if (!ov_change_mode %in% valid_modes) {
+    stop(
+      "Unknown ov_change_mode: ",
+      ov_change_mode,
       ". Valid modes are: ",
       paste(valid_modes, collapse = ", "),
       call. = FALSE
@@ -36,64 +392,66 @@ validate_ov_calculation_method <- function(ov_calculation_method) {
 
 # Check that the selected deforestation approach is valid.
 validate_defor_approach <- function(defor_approach) {
-  if (!defor_approach %in% defor_approaches) {
+  valid_approaches <- names(defor_approach_specs)
+
+  if (!defor_approach %in% valid_approaches) {
     stop(
       "Unknown defor_approach: ",
       defor_approach,
       ". Valid approaches are: ",
-      paste(defor_approaches, collapse = ", "),
+      paste(valid_approaches, collapse = ", "),
       call. = FALSE
     )
   }
 }
 
-# Check that the selected regression scale is valid.
-validate_regression_scale <- function(regression_scale) {
-  if (!regression_scale %in% regression_scales) {
+# Check that the selected annualization mode is valid.
+validate_annualization_mode <- function(annualization_mode) {
+  if (!annualization_mode %in% annualization_modes) {
     stop(
-      "Unknown regression_scale: ",
-      regression_scale,
-      ". Valid scales are: ",
-      paste(regression_scales, collapse = ", "),
-      call. = FALSE
-    )
-  }
-}
-
-# Check that the selected regression model family is valid.
-validate_regression_model_family <- function(model_family) {
-  if (!model_family %in% regression_model_families) {
-    stop(
-      "Unknown regression_model_family: ",
-      model_family,
-      ". Valid families are: ",
-      paste(regression_model_families, collapse = ", "),
-      call. = FALSE
-    )
-  }
-}
-
-# Check that the selected grouping level is valid.
-validate_regression_grouping_level <- function(grouping_level) {
-  if (!grouping_level %in% regression_grouping_levels) {
-    stop(
-      "Unknown regression_grouping_level: ",
-      grouping_level,
-      ". Valid levels are: ",
-      paste(regression_grouping_levels, collapse = ", "),
-      call. = FALSE
-    )
-  }
-}
-
-# Check that the selected deforestation exposure mode is valid.
-validate_defor_exposure_mode <- function(exposure_mode) {
-  if (!exposure_mode %in% defor_exposure_modes) {
-    stop(
-      "Unknown defor_exposure_mode: ",
-      exposure_mode,
+      "Unknown annualization_mode: ",
+      annualization_mode,
       ". Valid modes are: ",
-      paste(defor_exposure_modes, collapse = ", "),
+      paste(annualization_modes, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+# Check that the selected regression model is valid.
+validate_regression_model <- function(regression_model) {
+  if (!regression_model %in% regression_models) {
+    stop(
+      "Unknown regression_model: ",
+      regression_model,
+      ". Valid models are: ",
+      paste(regression_models, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+# Check that the selected regression group is valid.
+validate_regression_group <- function(regression_group) {
+  if (!regression_group %in% regression_groups) {
+    stop(
+      "Unknown regression_group: ",
+      regression_group,
+      ". Valid levels are: ",
+      paste(regression_groups, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+# Check that the selected deforestation bin is valid.
+validate_defor_bin <- function(defor_bin) {
+  if (!defor_bin %in% defor_bins) {
+    stop(
+      "Unknown defor_bin: ",
+      defor_bin,
+      ". Valid modes are: ",
+      paste(defor_bins, collapse = ", "),
       call. = FALSE
     )
   }
@@ -111,42 +469,42 @@ get_ov_calculation_spec <- function(ov_calculation_method = current_ov_calculati
 }
 
 # Set whether regressions use raw deltas or annualized deltas.
-set_regression_scale <- function(regression_scale) {
-  validate_regression_scale(regression_scale)
+set_annualization_mode <- function(annualization_mode) {
+  validate_annualization_mode(annualization_mode)
 
-  current_regression_scale <<- regression_scale
+  current_annualization_mode <<- annualization_mode
 
   invisible(
     list(
-      current_regression_scale = current_regression_scale
+      current_annualization_mode = current_annualization_mode
     )
   )
 }
 
-# Set the model family used for the current regression run.
-set_regression_model_family <- function(model_family) {
-  validate_regression_model_family(model_family)
+# Set the regression model used for the current regression run.
+set_regression_model <- function(regression_model) {
+  validate_regression_model(regression_model)
 
-  current_regression_model_family <<- model_family
+  current_regression_model <<- regression_model
 
   invisible(
     list(
-      current_regression_model_family = current_regression_model_family
+      current_regression_model = current_regression_model
     )
   )
 }
 
-# Set the grouping level used for regressions and diagnostics.
-set_regression_grouping_level <- function(grouping_level) {
-  validate_regression_grouping_level(grouping_level)
+# Set the regression group used for regressions and diagnostics.
+set_regression_group <- function(regression_group) {
+  validate_regression_group(regression_group)
 
-  current_grouping_level <<- grouping_level
-  current_group_col <<- regression_grouping_specs[[grouping_level]]$group_col
-  current_group_label <<- regression_grouping_specs[[grouping_level]]$label
+  current_regression_group <<- regression_group
+  current_group_col <<- regression_group_specs[[regression_group]]$group_col
+  current_group_label <<- regression_group_specs[[regression_group]]$label
 
   invisible(
     list(
-      current_grouping_level = current_grouping_level,
+      current_regression_group = current_regression_group,
       current_group_col = current_group_col,
       current_group_label = current_group_label
     )
@@ -157,7 +515,7 @@ set_regression_grouping_level <- function(grouping_level) {
 set_delta_ov_approach <- function(delta_ov_approach) {
   validate_delta_ov_approach(delta_ov_approach)
   
-  current_ov_approach <<- delta_ov_approach
+  current_delta_ov_approach <<- delta_ov_approach
   analysis_output_dir_current <<- file.path(
     repo_root,
     "deforestation_tile_tag",
@@ -167,8 +525,94 @@ set_delta_ov_approach <- function(delta_ov_approach) {
   
   invisible(
     list(
-      current_ov_approach = current_ov_approach,
+      current_delta_ov_approach = current_delta_ov_approach,
       analysis_output_dir_current = analysis_output_dir_current
+    )
+  )
+}
+
+set_single_tile_collapse_mode <- function(single_tile_collapse_mode) {
+  validate_single_tile_collapse_mode(single_tile_collapse_mode)
+
+  current_single_tile_collapse_mode <<- single_tile_collapse_mode
+  current_single_tile_collapse_label <<- single_tile_collapse_mode_specs[[single_tile_collapse_mode]]$label
+
+  invisible(
+    list(
+      current_single_tile_collapse_mode = current_single_tile_collapse_mode,
+      current_single_tile_collapse_label = current_single_tile_collapse_label
+    )
+  )
+}
+
+get_ov_threshold <- function(ov_change_mode = current_ov_change_mode,
+                             ov_calculation_method = current_ov_calculation_method) {
+  validate_ov_change_mode(ov_change_mode)
+  validate_ov_calculation_method(ov_calculation_method)
+
+  spec <- ov_change_mode_specs[[ov_change_mode]]
+
+  if (!isTRUE(spec$apply_threshold)) {
+    return(NA_real_)
+  }
+
+  threshold <- ov_thresholds[[ov_calculation_method]]
+
+  if (is.null(threshold)) {
+    threshold <- ov_thresholds[["default"]]
+  }
+
+  if (is.null(threshold) || is.na(threshold)) {
+    stop(
+      "No starting-OV threshold configured for ",
+      ov_change_mode,
+      " with ",
+      ov_calculation_method,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  as.numeric(threshold)
+}
+
+ov_change_uses_percent <- function(ov_change_mode = current_ov_change_mode) {
+  validate_ov_change_mode(ov_change_mode)
+  isTRUE(ov_change_mode_specs[[ov_change_mode]]$use_percent_change)
+}
+
+ov_change_applies_threshold <- function(ov_change_mode = current_ov_change_mode) {
+  validate_ov_change_mode(ov_change_mode)
+  isTRUE(ov_change_mode_specs[[ov_change_mode]]$apply_threshold)
+}
+
+get_delta_ov_axis_label <- function(ov_change_mode = current_ov_change_mode) {
+  if (ov_change_uses_percent(ov_change_mode)) {
+    return("∆OV (% of starting OV)")
+  }
+
+  "∆OV"
+}
+
+set_ov_change_mode <- function(ov_change_mode) {
+  validate_ov_change_mode(ov_change_mode)
+
+  current_ov_change_mode <<- ov_change_mode
+  current_ov_change_label <<- ov_change_mode_specs[[ov_change_mode]]$label
+  current_ov_threshold <<- NA_real_
+
+  if (!is.na(current_ov_calculation_method)) {
+    current_ov_threshold <<- get_ov_threshold(
+      ov_change_mode = current_ov_change_mode,
+      ov_calculation_method = current_ov_calculation_method
+    )
+  }
+
+  invisible(
+    list(
+      current_ov_change_mode = current_ov_change_mode,
+      current_ov_change_label = current_ov_change_label,
+      current_ov_threshold = current_ov_threshold
     )
   )
 }
@@ -182,28 +626,40 @@ set_ov_calculation_method <- function(ov_calculation_method) {
   current_ov_calculation_label <<- spec$label
   current_delta_ov_source_col <<- spec$delta_col
   current_delta_ov_annualized_source_col <<- spec$annualized_col
+  current_starting_ov_source_col <<- spec$initial_col
+
+  if (!is.na(current_ov_change_mode)) {
+    current_ov_threshold <<- get_ov_threshold(
+      ov_change_mode = current_ov_change_mode,
+      ov_calculation_method = current_ov_calculation_method
+    )
+  }
 
   invisible(
     list(
       current_ov_calculation_method = current_ov_calculation_method,
       current_ov_calculation_label = current_ov_calculation_label,
       current_delta_ov_source_col = current_delta_ov_source_col,
-      current_delta_ov_annualized_source_col = current_delta_ov_annualized_source_col
+      current_delta_ov_annualized_source_col = current_delta_ov_annualized_source_col,
+      current_starting_ov_source_col = current_starting_ov_source_col,
+      current_ov_threshold = current_ov_threshold
     )
   )
 }
 
-# Return the configured source column for one deforestation approach/exposure pair.
+# Return the configured source column for one deforestation tile-sum/bin pair.
 get_defor_source_col <- function(defor_approach,
-                                 exposure_mode = current_defor_exposure_mode) {
+                                 defor_bin = current_defor_bin) {
   validate_defor_approach(defor_approach)
-  validate_defor_exposure_mode(exposure_mode)
+  validate_defor_bin(defor_bin)
 
   spec <- get_defor_approach_spec(defor_approach)
 
+  defor_bin_source_mode <- defor_bin_specs[[defor_bin]]$source_mode
+
   if ("source_cols" %in% names(spec)) {
-    source_col <- spec$source_cols[[exposure_mode]]
-  } else if (identical(exposure_mode, "baseline")) {
+    source_col <- spec$source_cols[[defor_bin_source_mode]]
+  } else if (identical(defor_bin_source_mode, "baseline")) {
     source_col <- spec$source_col
   } else {
     source_col <- NULL
@@ -213,8 +669,8 @@ get_defor_source_col <- function(defor_approach,
     stop(
       "No source column configured for ",
       defor_approach,
-      " with exposure mode ",
-      exposure_mode,
+      " with defor_bin ",
+      defor_bin,
       ".",
       call. = FALSE
     )
@@ -223,22 +679,22 @@ get_defor_source_col <- function(defor_approach,
   source_col
 }
 
-# Set the active deforestation exposure mode.
-set_defor_exposure_mode <- function(exposure_mode) {
-  validate_defor_exposure_mode(exposure_mode)
+# Set the active deforestation bin.
+set_defor_bin <- function(defor_bin) {
+  validate_defor_bin(defor_bin)
 
-  current_defor_exposure_mode <<- exposure_mode
+  current_defor_bin <<- defor_bin
 
   if (!is.na(current_defor_approach)) {
     current_defor_source_col <<- get_defor_source_col(
       current_defor_approach,
-      current_defor_exposure_mode
+      current_defor_bin
     )
   }
 
   invisible(
     list(
-      current_defor_exposure_mode = current_defor_exposure_mode,
+      current_defor_bin = current_defor_bin,
       current_defor_source_col = current_defor_source_col
     )
   )
@@ -250,26 +706,24 @@ set_defor_approach <- function(defor_approach) {
   spec <- get_defor_approach_spec(defor_approach)
 
   current_defor_approach <<- defor_approach
-  current_defor_summing <<- spec$summing_dir
-  current_defor_data_type <<- spec$data_dir
+  current_defor_tile_sum <<- spec$tile_sum_dir
 
-  if (is.na(current_defor_exposure_mode)) {
+  if (is.na(current_defor_bin)) {
     stop(
-      "current_defor_exposure_mode is not set. Call set_defor_exposure_mode(...) before set_defor_approach(...).",
+      "current_defor_bin is not set. Call set_defor_bin(...) before set_defor_approach(...).",
       call. = FALSE
     )
   }
 
   current_defor_source_col <<- get_defor_source_col(
     current_defor_approach,
-    current_defor_exposure_mode
+    current_defor_bin
   )
 
   invisible(
     list(
       current_defor_approach = current_defor_approach,
-      current_defor_summing = current_defor_summing,
-      current_defor_data_type = current_defor_data_type,
+      current_defor_tile_sum = current_defor_tile_sum,
       current_defor_source_col = current_defor_source_col
     )
   )
@@ -280,72 +734,85 @@ build_run_label <- function(cluster_method = current_cluster_method,
                             cluster_radius_km = current_cluster_radius_km,
                             buffer_km = current_buffer_km,
                             ov_calculation_method = current_ov_calculation_method,
-                            regression_scale = current_regression_scale,
-                            ov_approach = current_ov_approach,
+                            annualization_mode = current_annualization_mode,
+                            delta_ov_approach = current_delta_ov_approach,
                             defor_approach = current_defor_approach,
-                            model_family = current_regression_model_family,
+                            regression_model = current_regression_model,
                             defor_transform = NULL,
                             label_type = c(
                               "human_readable",
                               "cluster_method_folder",
                               "cluster_radius_folder",
                               "buffer_folder",
-                              "grouping_level_folder",
+                              "regression_group_folder",
                               "ov_calculation_folder",
-                              "defor_exposure_folder",
-                              "regression_scale_folder",
-                              "ov_approach_folder",
-                              "defor_summing_folder",
-                              "defor_data_folder",
-                              "model_family_folder",
+                              "ov_change_folder",
+                              "defor_bin_folder",
+                              "annualization_mode_folder",
+                              "delta_ov_approach_folder",
+                              "defor_tile_sum_folder",
+                              "regression_model_folder",
                               "defor_transform_folder",
-                              "grouping_level_path",
+                              "regression_group_path",
                               "ov_calculation_path",
-                              "defor_exposure_path",
-                              "regression_scale_path",
-                              "ov_approach_path",
-                              "defor_summing_path",
-                              "defor_data_path",
-                              "model_family_path",
-                              "defor_transform_path"
+                              "defor_bin_path",
+                            "annualization_mode_path",
+                            "delta_ov_approach_path",
+                            "single_tile_collapse_path",
+                            "ov_change_path",
+                            "defor_tile_sum_path",
+                            "regression_model_path",
+                            "defor_transform_path"
                             ),
                             base_dir = output_dir) {
   label_type <- match.arg(label_type)
   
-  validate_regression_scale(regression_scale)
-  validate_delta_ov_approach(ov_approach)
+  validate_annualization_mode(annualization_mode)
+  validate_delta_ov_approach(delta_ov_approach)
+  validate_single_tile_collapse_mode(current_single_tile_collapse_mode)
+  validate_ov_change_mode(current_ov_change_mode)
   validate_ov_calculation_method(ov_calculation_method)
-  validate_regression_model_family(model_family)
+  validate_regression_model(regression_model)
 
   if (!is.null(defor_approach)) {
     validate_defor_approach(defor_approach)
   }
 
-  if (!is.null(defor_transform) && !defor_transform %in% defor_transforms) {
-    stop(
-      "Unknown defor_transform: ",
-      defor_transform,
-      ". Valid transforms are: ",
-      paste(defor_transforms, collapse = ", "),
-      call. = FALSE
-    )
-  }
-  
   defor_spec <- if (!is.null(defor_approach)) get_defor_approach_spec(defor_approach) else NULL
+  annualization_spec <- get_annualization_mode_spec(annualization_mode)
+  delta_ov_spec <- get_delta_ov_approach_spec(delta_ov_approach)
+  defor_transform_spec <- get_defor_transform_spec(defor_transform)
   ov_calc_spec <- get_ov_calculation_spec(ov_calculation_method)
 
   cluster_method_dir <- cluster_method
   cluster_radius_dir <- paste0("radius_", sprintf("%.1fkm", cluster_radius_km))
   buffer_dir <- paste0("buf_", buffer_km, "km")
-  grouping_dir <- regression_grouping_specs[[current_grouping_level]]$output_dir
+  grouping_dir <- regression_group_specs[[current_regression_group]]$output_dir
   ov_calculation_dir <- ov_calc_spec$output_dir
-  exposure_dir <- defor_exposure_mode_specs[[current_defor_exposure_mode]]$output_dir
-  scale_dir <- regression_scale
-  ov_dir <- ov_approach
-  defor_summing_dir <- if (!is.null(defor_spec)) defor_spec$summing_dir else NULL
-  defor_data_dir <- if (!is.null(defor_spec)) defor_spec$data_dir else NULL
-  model_family_dir <- model_family
-  transform_dir <- defor_transform
+  exposure_dir <- defor_bin_specs[[current_defor_bin]]$output_dir
+  scale_dir <- annualization_spec$output_dir
+  ov_dir <- delta_ov_spec$output_dir
+  single_tile_collapse_dir <- single_tile_collapse_mode_specs[[current_single_tile_collapse_mode]]$output_dir
+  ov_change_dir <- ov_change_mode_specs[[current_ov_change_mode]]$output_dir
+  defor_tile_sum_dir <- if (!is.null(defor_spec)) defor_spec$tile_sum_dir else NULL
+  regression_model_dir <- regression_model
+  transform_dir <- if (!is.null(defor_transform_spec)) defor_transform_spec$output_dir else NULL
+
+  path_dirs <- list(
+    cluster_method = cluster_method_dir,
+    cluster_radius = cluster_radius_dir,
+    buffer = buffer_dir,
+    regression_group = grouping_dir,
+    annualization_mode = scale_dir,
+    defor_bin = exposure_dir,
+    delta_ov_approach = ov_dir,
+    single_tile_collapse_mode = single_tile_collapse_dir,
+    ov_calculation_method = ov_calculation_dir,
+    ov_change_mode = ov_change_dir,
+    defor_tile_sum = defor_tile_sum_dir,
+    regression_model = regression_model_dir,
+    defor_transform = transform_dir
+  )
   
   if (label_type == "cluster_method_folder") {
     return(cluster_method_dir)
@@ -359,7 +826,7 @@ build_run_label <- function(cluster_method = current_cluster_method,
     return(buffer_dir)
   }
 
-  if (label_type == "grouping_level_folder") {
+  if (label_type == "regression_group_folder") {
     return(grouping_dir)
   }
 
@@ -367,81 +834,72 @@ build_run_label <- function(cluster_method = current_cluster_method,
     return(ov_calculation_dir)
   }
 
-  if (label_type == "defor_exposure_folder") {
+  if (label_type == "ov_change_folder") {
+    return(ov_change_dir)
+  }
+
+  if (label_type == "defor_bin_folder") {
     return(exposure_dir)
   }
 
-  if (label_type == "regression_scale_folder") {
+  if (label_type == "annualization_mode_folder") {
     return(scale_dir)
   }
   
-  if (label_type == "ov_approach_folder") {
+  if (label_type == "delta_ov_approach_folder") {
     return(ov_dir)
   }
   
-  if (label_type == "defor_summing_folder") {
-    return(defor_summing_dir)
+  if (label_type == "defor_tile_sum_folder") {
+    return(defor_tile_sum_dir)
   }
 
-  if (label_type == "defor_data_folder") {
-    return(defor_data_dir)
-  }
-
-  if (label_type == "model_family_folder") {
-    return(model_family_dir)
+  if (label_type == "regression_model_folder") {
+    return(regression_model_dir)
   }
   
   if (label_type == "defor_transform_folder") {
     return(transform_dir)
   }
 
-  if (label_type == "grouping_level_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir)
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "regression_group_path") {
+    return(build_conditional_output_path(path_dirs, "regression_group", base_dir))
   }
 
   if (label_type == "ov_calculation_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir)
-    return(do.call(file.path, as.list(path_parts)))
+    return(build_conditional_output_path(path_dirs, "ov_calculation_method", base_dir))
   }
 
-  if (label_type == "defor_exposure_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir)
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "ov_change_path") {
+    return(build_conditional_output_path(path_dirs, "ov_change_mode", base_dir))
   }
 
-  if (label_type == "regression_scale_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir)
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "defor_bin_path") {
+    return(build_conditional_output_path(path_dirs, "defor_bin", base_dir))
   }
 
-  if (label_type == "ov_approach_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir, ov_dir)
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "annualization_mode_path") {
+    return(build_conditional_output_path(path_dirs, "annualization_mode", base_dir))
+  }
+
+  if (label_type == "delta_ov_approach_path") {
+    return(build_conditional_output_path(path_dirs, "delta_ov_approach", base_dir))
+  }
+
+  if (label_type == "single_tile_collapse_path") {
+    return(build_conditional_output_path(path_dirs, "single_tile_collapse_mode", base_dir))
   }
   
-  if (label_type == "defor_summing_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir, ov_dir, defor_summing_dir)
-    path_parts <- path_parts[!vapply(path_parts, is.null, logical(1))]
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "defor_tile_sum_path") {
+    return(build_conditional_output_path(path_dirs, "defor_tile_sum", base_dir))
   }
 
-  if (label_type == "defor_data_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir, ov_dir, defor_summing_dir, defor_data_dir)
-    path_parts <- path_parts[!vapply(path_parts, is.null, logical(1))]
-    return(do.call(file.path, as.list(path_parts)))
-  }
-
-  if (label_type == "model_family_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir, ov_dir, defor_summing_dir, defor_data_dir, model_family_dir)
-    path_parts <- path_parts[!vapply(path_parts, is.null, logical(1))]
-    return(do.call(file.path, as.list(path_parts)))
+  if (label_type == "regression_model_path") {
+    return(build_conditional_output_path(path_dirs, "regression_model", base_dir))
   }
 
   if (label_type == "defor_transform_path") {
-    path_parts <- c(base_dir, cluster_method_dir, cluster_radius_dir, buffer_dir, grouping_dir, ov_calculation_dir, exposure_dir, scale_dir, ov_dir, defor_summing_dir, defor_data_dir, model_family_dir, transform_dir)
-    path_parts <- path_parts[!vapply(path_parts, is.null, logical(1))]
-    return(do.call(file.path, as.list(path_parts)))
+    return(build_conditional_output_path(path_dirs, "defor_transform", base_dir))
   }
   
   defor_label <- if (!is.null(defor_approach)) {
@@ -454,15 +912,16 @@ build_run_label <- function(cluster_method = current_cluster_method,
     paste0("cluster_method = ", cluster_method),
     paste0("cluster_radius_km = ", sprintf("%.1f", cluster_radius_km)),
     paste0("buffer_km = ", buffer_km),
-    paste0("grouping_level = ", current_grouping_level),
+    paste0("regression_group = ", current_regression_group),
     paste0("ov_calculation_method = ", ov_calculation_method),
-    paste0("defor_exposure_mode = ", current_defor_exposure_mode),
-    paste0("regression_scale = ", regression_scale),
-    paste0("ov_approach = ", ov_approach),
+    paste0("defor_bin = ", current_defor_bin),
+    paste0("annualization_mode = ", annualization_mode),
+    paste0("delta_ov_approach = ", delta_ov_approach),
+    paste0("single_tile_collapse_mode = ", current_single_tile_collapse_mode),
+    paste0("ov_change_mode = ", current_ov_change_mode),
     if (!is.null(defor_approach)) paste0("defor_approach = ", defor_approach),
-    if (!is.null(defor_summing_dir)) paste0("defor_summing = ", defor_summing_dir),
-    if (!is.null(defor_data_dir)) paste0("defor_data = ", defor_data_dir),
-    paste0("model_family = ", model_family),
+    if (!is.null(defor_tile_sum_dir)) paste0("defor_tile_sum = ", defor_tile_sum_dir),
+    paste0("regression_model = ", regression_model),
     if (!is.null(defor_label)) paste0("defor_label = ", defor_label),
     if (!is.null(defor_transform)) paste0("defor_transform = ", defor_transform)
   )
@@ -474,18 +933,16 @@ build_run_label <- function(cluster_method = current_cluster_method,
 set_regression_run_paths <- function(cluster_method, 
                                      cluster_radius_km, 
                                      buffer_km) {
-  if (is.na(current_ov_approach)) {
+  if (is.na(current_delta_ov_approach)) {
     stop(
-      "current_ov_approach is not set. Call set_delta_ov_approach('ov_year_pair') ",
-      "or set_delta_ov_approach('ov_whole_cluster') before set_regression_run_paths().",
+      "current_delta_ov_approach is not set. Call set_delta_ov_approach(...) before set_regression_run_paths().",
       call. = FALSE
     )
   }
 
-  if (is.na(current_regression_scale)) {
+  if (is.na(current_annualization_mode)) {
     stop(
-      "current_regression_scale is not set. Call set_regression_scale('non_annualized') ",
-      "or set_regression_scale('annualized') before set_regression_run_paths().",
+      "current_annualization_mode is not set. Call set_annualization_mode(...) before set_regression_run_paths().",
       call. = FALSE
     )
   }
@@ -497,16 +954,30 @@ set_regression_run_paths <- function(cluster_method,
     )
   }
 
-  if (is.na(current_grouping_level) || is.na(current_group_col) || is.na(current_group_label)) {
+  if (is.na(current_ov_change_mode)) {
     stop(
-      "current_grouping_level is not set. Call set_regression_grouping_level(...) before set_regression_run_paths().",
+      "current_ov_change_mode is not set. Call set_ov_change_mode(...) before set_regression_run_paths().",
       call. = FALSE
     )
   }
 
-  if (is.na(current_defor_exposure_mode)) {
+  if (is.na(current_single_tile_collapse_mode)) {
     stop(
-      "current_defor_exposure_mode is not set. Call set_defor_exposure_mode(...) before set_regression_run_paths().",
+      "current_single_tile_collapse_mode is not set. Call set_single_tile_collapse_mode(...) before set_regression_run_paths().",
+      call. = FALSE
+    )
+  }
+
+  if (is.na(current_regression_group) || is.na(current_group_col) || is.na(current_group_label)) {
+    stop(
+      "current_regression_group is not set. Call set_regression_group(...) before set_regression_run_paths().",
+      call. = FALSE
+    )
+  }
+
+  if (is.na(current_defor_bin)) {
+    stop(
+      "current_defor_bin is not set. Call set_defor_bin(...) before set_regression_run_paths().",
       call. = FALSE
     )
   }
@@ -518,9 +989,9 @@ set_regression_run_paths <- function(cluster_method,
     )
   }
 
-  if (is.na(current_regression_model_family)) {
+  if (is.na(current_regression_model)) {
     stop(
-      "current_regression_model_family is not set. Call set_regression_model_family(...) before set_regression_run_paths().",
+      "current_regression_model is not set. Call set_regression_model(...) before set_regression_run_paths().",
       call. = FALSE
     )
   }
@@ -543,7 +1014,8 @@ set_regression_run_paths <- function(cluster_method,
     current_cluster_method,
     paste0("radius_", sprintf("%.1fkm", current_cluster_radius_km)),
     current_buffer_stub,
-    current_ov_approach,
+    delta_ov_approach_specs[[current_delta_ov_approach]]$source_dir,
+    single_tile_collapse_mode_specs[[current_single_tile_collapse_mode]]$source_dir,
     "tables",
     "cluster_deltas.csv"
   )
@@ -563,30 +1035,36 @@ set_regression_run_paths <- function(cluster_method,
   
   # Regression output directory for this run and deforestation approach
   ov_calculation_output_dir <<- build_run_label(label_type = "ov_calculation_path")
-  regression_scale_output_dir <<- build_run_label(label_type = "regression_scale_path")
-  ov_output_dir <<- build_run_label(label_type = "ov_approach_path")
-  defor_approach_output_dir <<- build_run_label(label_type = "defor_data_path")
-  model_family_output_dir <<- build_run_label(label_type = "model_family_path")
+  annualization_mode_output_dir <<- build_run_label(label_type = "annualization_mode_path")
+  ov_output_dir <<- build_run_label(label_type = "delta_ov_approach_path")
+  single_tile_collapse_output_dir <<- build_run_label(label_type = "single_tile_collapse_path")
+  ov_change_output_dir <<- build_run_label(label_type = "ov_change_path")
+  defor_approach_output_dir <<- build_run_label(label_type = "defor_tile_sum_path")
+  regression_model_output_dir <<- build_run_label(label_type = "regression_model_path")
   
-  for (dir_path in c(ov_calculation_output_dir, regression_scale_output_dir, ov_output_dir, defor_approach_output_dir, model_family_output_dir)) {
+  for (dir_path in c(ov_calculation_output_dir, annualization_mode_output_dir, ov_output_dir, single_tile_collapse_output_dir, ov_change_output_dir, defor_approach_output_dir, regression_model_output_dir)) {
     dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
   }
   
   invisible(
     list(
-      current_ov_approach = current_ov_approach,
+      current_delta_ov_approach = current_delta_ov_approach,
+      current_single_tile_collapse_mode = current_single_tile_collapse_mode,
       current_ov_calculation_method = current_ov_calculation_method,
-      current_regression_scale = current_regression_scale,
-      current_regression_model_family = current_regression_model_family,
+      current_ov_change_mode = current_ov_change_mode,
+      current_annualization_mode = current_annualization_mode,
+      current_regression_model = current_regression_model,
       current_defor_approach = current_defor_approach,
       cluster_deltas_path = cluster_deltas_path,
       canonical_tabular_dir = canonical_tabular_dir,
       canonical_spatial_dir = canonical_spatial_dir,
       ov_calculation_output_dir = ov_calculation_output_dir,
-      regression_scale_output_dir = regression_scale_output_dir,
+      annualization_mode_output_dir = annualization_mode_output_dir,
       ov_output_dir = ov_output_dir,
+      single_tile_collapse_output_dir = single_tile_collapse_output_dir,
+      ov_change_output_dir = ov_change_output_dir,
       defor_approach_output_dir = defor_approach_output_dir,
-      model_family_output_dir = model_family_output_dir
+      regression_model_output_dir = regression_model_output_dir
     )
   )
 }
@@ -632,22 +1110,26 @@ save_model_rds <- function(model,
   if (!is.null(defor_transform)) {
     attr(model, "defor_transform") <- defor_transform
   }
-  attr(model, "grouping_level") <- current_grouping_level
-  attr(model, "defor_exposure_mode") <- current_defor_exposure_mode
-  attr(model, "defor_summing") <- current_defor_summing
-  attr(model, "defor_data_type") <- current_defor_data_type
-  attr(model, "regression_scale") <- current_regression_scale
+  attr(model, "regression_group") <- current_regression_group
+  attr(model, "defor_bin") <- current_defor_bin
+  attr(model, "defor_tile_sum") <- current_defor_tile_sum
+  attr(model, "annualization_mode") <- current_annualization_mode
+  attr(model, "single_tile_collapse_mode") <- current_single_tile_collapse_mode
   attr(model, "ov_calculation_method") <- current_ov_calculation_method
+  attr(model, "ov_change_mode") <- current_ov_change_mode
+  attr(model, "ov_threshold") <- current_ov_threshold
+  attr(model, "ov_change_uses_percent") <- ov_change_uses_percent()
   attr(model, "delta_ov_source_col") <- current_delta_ov_source_col
-  attr(model, "ov_approach") <- current_ov_approach
-  attr(model, "regression_model_family") <- current_regression_model_family
+  attr(model, "starting_ov_source_col") <- current_starting_ov_source_col
+  attr(model, "delta_ov_approach") <- current_delta_ov_approach
+  attr(model, "regression_model") <- current_regression_model
   attr(model, "buffer_km") <- current_buffer_km
   attr(model, "cluster_method") <- current_cluster_method
   attr(model, "cluster_radius_km") <- current_cluster_radius_km
   
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   saveRDS(model, path)
-  message("Wrote model: ", path)
+  log_verbose("Wrote model: ", path)
 }
 
 # ------------------------------
@@ -671,10 +1153,20 @@ standardize_climate_zone_order <- function(x) {
   )
 }
 
+# Order country labels alphabetically while preserving the observed spelling.
+standardize_country_order <- function(x) {
+  x_chr <- as.character(x)
+  factor(x_chr, levels = sort(unique(x_chr[!is.na(x_chr)])))
+}
+
 # Order the active grouping variable appropriately for plots and summaries.
-standardize_group_order <- function(x, grouping_level = current_grouping_level) {
-  if (identical(grouping_level, "climate_zone")) {
+standardize_group_order <- function(x, regression_group = current_regression_group) {
+  if (identical(regression_group, "by_climate_zone")) {
     return(standardize_climate_zone_order(x))
+  }
+
+  if (identical(regression_group, "by_country")) {
+    return(standardize_country_order(x))
   }
 
   standardize_aez_order(x)
@@ -693,11 +1185,13 @@ derive_climate_zone_from_aez <- function(aez_value) {
 }
 
 # ------------------------------
-# Normalize cluster delta inputs into the format expected by the regressions
+# Normalize cluster ∆ inputs into the format expected by the regressions
 # ------------------------------
 
-# Edit cluster-delta column names to be usable for start-to-final cluster OV calculation
+# Standardize cluster-∆ column names once at the regression boundary.
 normalize_cluster_deltas_schema <- function(df) {
+  names(df) <- tolower(names(df))
+
   rename_map <- c(
     year_start = "year_t1",
     year_final = "year_t2",
@@ -714,10 +1208,18 @@ normalize_cluster_deltas_schema <- function(df) {
     }
   }
 
+  if ("analysis_unit_id" %in% names(df) && !"cluster_id" %in% names(df)) {
+    df$cluster_id <- df$analysis_unit_id
+  }
+
+  if ("cluster_id" %in% names(df) && !"analysis_unit_id" %in% names(df)) {
+    df$analysis_unit_id <- df$cluster_id
+  }
+
   df
 }
 
-# Coerce cluster-delta columns to the types expected by the regression pipeline.
+# Coerce cluster-∆ columns to the types expected by the regression pipeline.
 coerce_cluster_deltas_types <- function(df) {
   df <- normalize_cluster_deltas_schema(df)
   assert_has_cols(df, required_cluster_deltas_cols, "cluster_deltas")
@@ -736,8 +1238,11 @@ coerce_cluster_deltas_types <- function(df) {
   
   df %>%
     mutate(
-      AEZ = as.character(AEZ),
+      aez = as.character(aez),
       cluster_id = as.character(cluster_id),
+      analysis_unit_id = as.character(analysis_unit_id),
+      primary_country_id = as.character(primary_country_id),
+      primary_country_name = as.character(primary_country_name),
       year_t1 = as.integer(year_t1),
       year_t2 = as.integer(year_t2),
       year_gap = as.integer(year_gap),
@@ -754,7 +1259,7 @@ coerce_cluster_deltas_types <- function(df) {
     )
 }
 
-# Normalize cluster-delta inputs into the regression-ready format used downstream
+# Normalize cluster-∆ inputs into the regression-ready format used downstream.
 build_regression_data <- function(cluster_deltas) {
   cluster_deltas <- normalize_cluster_deltas_schema(cluster_deltas)
   assert_has_cols(cluster_deltas, required_cluster_deltas_cols, "cluster_deltas")
@@ -762,12 +1267,13 @@ build_regression_data <- function(cluster_deltas) {
   cluster_deltas %>%
     coerce_cluster_deltas_types() %>%
     mutate(
-      AEZ = standardize_aez_order(AEZ),
+      aez = standardize_aez_order(aez),
       climate_zone = standardize_climate_zone_order(
-        derive_climate_zone_from_aez(AEZ)
+        derive_climate_zone_from_aez(aez)
       ),
+      country = standardize_country_order(primary_country_name),
       group_value = standardize_group_order(.data[[current_group_col]]),
-      delta_ov_annualized = if (identical(current_regression_scale, "annualized")) {
+      delta_ov_annualized = if (is_annualized_delta_mode()) {
         delta_ov
       } else {
         if_else(
@@ -787,8 +1293,25 @@ build_regression_data <- function(cluster_deltas) {
     )
 }
 
+apply_ov_change <- function(data) {
+  validate_ov_change_mode(current_ov_change_mode)
+  assert_has_cols(data, "starting_ov", "data")
+
+  if (!ov_change_applies_threshold()) {
+    return(data)
+  }
+
+  threshold <- get_ov_threshold(
+    ov_change_mode = current_ov_change_mode,
+    ov_calculation_method = current_ov_calculation_method
+  )
+
+  data %>%
+    filter(!is.na(starting_ov), starting_ov >= threshold)
+}
+
 # ------------------------------
-# Recompute transformed deforestation fields and trim outliers within each AEZ.
+# Recompute transformed deforestation fields and trim outliers within each group.
 # ------------------------------
 
 # Rebuild the log1p deforestation column after any row filtering or value changes.
@@ -821,24 +1344,12 @@ p90_trim <- function(data, threshold = 0.90) {
     log1p_defor()
 }
 
-# Cap extreme deforestation values within each group at the chosen quantile threshold.
-winsorize <- function(data, threshold = 0.90) {
-  assert_has_cols(data, c("group_value", "delta_defor_ha"), "data")
-
-  data %>%
-    filter(!is.na(group_value), !is.na(delta_defor_ha)) %>%
-    group_by(group_value) %>%
-    mutate(
-      winsor_cap_defor = quantile(delta_defor_ha, threshold, na.rm = TRUE),
-      delta_defor_ha = pmin(delta_defor_ha, winsor_cap_defor)
-    ) %>%
-    ungroup() %>%
-    dplyr::select(-winsor_cap_defor) %>%
-    log1p_defor()
-}
-
-# Count usable rows by grouping variable and keep only groups that meet the minimum regression threshold.
+# Count usable rows by grouping variable and keep only groups that meet the
+# minimum regression thresholds. Outcome variation is required because fixest
+# cannot estimate an intercept model with a constant dependent variable.
 prepare_regression_variant <- function(data_variant, regressor_col, variant_label) {
+  assert_has_cols(data_variant, c("group_value", "cluster_id", "delta_ov", regressor_col), "data_variant")
+
   group_counts <- data_variant %>%
     filter(
       !is.na(group_value),
@@ -848,7 +1359,10 @@ prepare_regression_variant <- function(data_variant, regressor_col, variant_labe
     group_by(group_value) %>%
     summarise(
       n_obs = n(),
+      n_clusters = n_distinct(cluster_id),
+      n_negative_delta_clusters = n_distinct(cluster_id[delta_ov < 0]),
       n_unique_regressor = n_distinct(.data[[regressor_col]]),
+      n_unique_delta_ov = n_distinct(delta_ov),
       .groups = "drop"
     ) %>%
     arrange(group_value)
@@ -856,7 +1370,13 @@ prepare_regression_variant <- function(data_variant, regressor_col, variant_labe
   eligible_groups <- group_counts %>%
     filter(
       n_obs >= min_observations_per_group_regression,
-      n_unique_regressor >= 2
+      n_unique_regressor >= 2,
+      n_unique_delta_ov >= 2,
+      if (identical(current_regression_group, "by_country")) {
+        n_negative_delta_clusters >= min_observations_per_group_regression
+      } else {
+        TRUE
+      }
     ) %>%
     pull(group_value) %>%
     as.character()
@@ -868,9 +1388,9 @@ prepare_regression_variant <- function(data_variant, regressor_col, variant_labe
       !is.na(delta_ov)
     )
 
-  message(
+  log_verbose(
     current_group_label,
-    " groups meeting minimum observation threshold for ",
+    " groups meeting minimum regression thresholds for ",
     variant_label,
     " (",
     min_observations_per_group_regression,
@@ -1208,7 +1728,8 @@ build_group_fit_summary <- function(models_list, data_used, model_label, regress
     dplyr::left_join(correlations, by = "group_value")
 }
 
-# Write one transform-level fit-stat table with run metadata columns prepended.
+# Write one transform-level fit-stat table. The folder hierarchy carries the
+# run metadata, so keep the CSV focused on group-level diagnostics.
 write_fit_summary <- function(summary_df,
                               output_dirs,
                               defor_transform,
@@ -1220,31 +1741,40 @@ write_fit_summary <- function(summary_df,
 
   readr::write_csv(
     summary_df %>%
-      mutate(
-        grouping_level = current_grouping_level,
-        group_label = current_group_label,
-        defor_exposure_mode = current_defor_exposure_mode,
-        defor_summing = current_defor_summing,
-        defor_data_type = current_defor_data_type,
-        ov_calculation_method = current_ov_calculation_method,
-        ov_calculation_label = current_ov_calculation_label,
-        delta_ov_source_col = current_delta_ov_source_col,
-        ov_approach = current_ov_approach,
-        regression_scale = current_regression_scale,
-        buffer_km = current_buffer_km,
-        cluster_method = current_cluster_method,
-        cluster_radius_km = current_cluster_radius_km,
-        defor_approach = current_defor_approach,
-        defor_source_col = current_defor_source_col,
-        regression_model_family = current_regression_model_family,
-        defor_transform = defor_transform,
-        run_label = run_label,
-        .before = 1
+      dplyr::select(
+        group_value,
+        model,
+        n_obs,
+        r_squared,
+        adj_r_squared,
+        slope,
+        n_unique_regressor,
+        correlation
       ) %>%
       mutate(
         across(where(is.numeric), ~ round(.x, 3))
       ),
     file.path(output_dirs$family_root, filename)
+  )
+}
+
+# Build a compact chart subtitle from the active hierarchy options.
+build_compact_run_label <- function(defor_transform = NULL) {
+  paste(
+    c(
+      current_regression_group,
+      paste0("buf_", current_buffer_km, "km"),
+      current_annualization_mode,
+      current_defor_bin,
+      current_delta_ov_approach,
+      current_single_tile_collapse_mode,
+      current_ov_calculation_method,
+      current_ov_change_mode,
+      current_defor_tile_sum,
+      current_regression_model,
+      defor_transform
+    ),
+    collapse = " | "
   )
 }
 
@@ -1256,7 +1786,7 @@ save_family_plot <- function(plot_obj,
                              width = 12,
                              height = 8) {
   if (!is.null(run_label)) {
-    plot_obj <- plot_obj + labs(subtitle = run_label)
+    plot_obj <- plot_obj + labs(subtitle = stringr::str_wrap(run_label, width = 95))
   }
 
   ggplot2::ggsave(
@@ -1308,6 +1838,33 @@ build_prediction_grid <- function(models_list, data_used, regressor_col, n_point
   )
 }
 
+# Build readable per-facet fit labels for diagnostic plots.
+build_plot_fit_labels <- function(models_list, group_levels) {
+  if (length(models_list) == 0) {
+    return(tibble::tibble())
+  }
+
+  purrr::imap_dfr(
+    models_list,
+    ~ {
+      r_squared <- extract_fitstat_numeric(.x, "r2")
+
+      tibble::tibble(
+        group_value = .y,
+        r_squared = r_squared,
+        r_squared_label = if (is.finite(r_squared)) {
+          sprintf("R^2 = %.3f", r_squared)
+        } else {
+          "R^2 = n/a"
+        }
+      )
+    }
+  ) %>%
+    mutate(
+      group_value = factor(as.character(group_value), levels = group_levels)
+    )
+}
+
 # Bin observation windows using year_gap so diagnostics can show short,
 # medium, and long OV intervals without changing the underlying regression data.
 add_year_gap_bin <- function(data) {
@@ -1335,6 +1892,7 @@ build_family_plot_from_models <- function(data_used,
                                           title_text) {
   prediction_grid <- build_prediction_grid(models_list, data_used, regressor_col)
   group_levels <- levels(standardize_group_order(c(data_used$group_value, prediction_grid$group_value)))
+  fit_labels <- build_plot_fit_labels(models_list, group_levels)
 
   data_used <- data_used %>%
     add_year_gap_bin() %>%
@@ -1358,7 +1916,26 @@ build_family_plot_from_models <- function(data_used,
       linewidth = 0.8,
       inherit.aes = FALSE
     ) +
-    facet_wrap(~ group_value, scales = "fixed") +
+    geom_label(
+      data = fit_labels,
+      aes(label = r_squared_label),
+      x = -Inf,
+      y = Inf,
+      hjust = -0.05,
+      vjust = 1.15,
+      size = 3,
+      linewidth = 0.2,
+      fill = "white",
+      alpha = 0.85,
+      color = "grey15",
+      inherit.aes = FALSE
+    ) +
+    facet_wrap(
+      ~ group_value,
+      scales = "fixed",
+      axes = "all",
+      axis.labels = "all"
+    ) +
     scale_color_manual(
       values = c(
         "1-2 years" = "#1b9e77",
@@ -1370,7 +1947,7 @@ build_family_plot_from_models <- function(data_used,
     ) +
     labs(
       x = regressor_col,
-      y = "delta_ov",
+      y = get_delta_ov_axis_label(),
       title = title_text
     ) +
     theme_minimal()
@@ -1415,6 +1992,17 @@ build_run_labels_by_transform <- function(transforms = defor_transforms) {
   )
 }
 
+# Build compact chart labels for each configured transform.
+build_compact_run_labels_by_transform <- function(transforms = defor_transforms) {
+  setNames(
+    purrr::map_chr(
+      transforms,
+      ~ build_compact_run_label(defor_transform = .x)
+    ),
+    transforms
+  )
+}
+
 # Write a formatted modelsummary table to disk and include the run label in the title when provided.
 save_modelsummary_table <- function(models, path, title = NULL, run_label = NULL, ...) {
   if (!is.null(run_label)) {
@@ -1429,5 +2017,5 @@ save_modelsummary_table <- function(models, path, title = NULL, run_label = NULL
     ...
   )
   
-  message("Wrote table: ", path)
+  log_verbose("Wrote table: ", path)
 }

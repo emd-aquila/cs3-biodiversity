@@ -157,6 +157,352 @@ get_available_ov_score_specs <- function(cluster_year_ov) {
   specs
 }
 
+build_analysis_unit_tables <- function(cluster_sites,
+                                       cluster_buffer_this,
+                                       cluster_buffer_tile_this,
+                                       cluster_buffer_country_this,
+                                       cluster_buffer_year_defor_this,
+                                       cluster_medoids,
+                                       defor_tile_year,
+                                       ov_score_specs,
+                                       collapse_single_tile_clusters = TRUE) {
+  cluster_buffer_meta_original <- cluster_buffer_this %>%
+    st_drop_geometry() %>%
+    distinct(
+      AEZ,
+      cluster_id,
+      buffer_km,
+      n_sites,
+      n_matched_tiles,
+      n_matched_tiles_with_ha,
+      n_matched_tiles_missing_ha,
+      tagged_any_tile,
+      tagged_ha_tile
+    ) %>%
+    mutate(
+      original_cluster_id = as.character(cluster_id)
+    )
+
+  cluster_tile_summary <- cluster_buffer_tile_this %>%
+    group_by(AEZ, cluster_id, buffer_km) %>%
+    summarise(
+      n_all_matched_tiles = n_distinct(tile_id),
+      n_ha_matched_tiles = n_distinct(tile_id[has_ha_info %in% TRUE]),
+      single_tile_id = dplyr::if_else(
+        n_distinct(tile_id) == 1L,
+        dplyr::first(as.character(tile_id)),
+        NA_character_
+      ),
+      single_tile_has_ha = dplyr::if_else(
+        n_distinct(tile_id) == 1L,
+        dplyr::first(has_ha_info) %in% TRUE,
+        FALSE
+      ),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      original_cluster_id = as.character(cluster_id)
+    ) %>%
+    dplyr::select(-cluster_id)
+
+  analysis_unit_membership <- cluster_buffer_meta_original %>%
+    left_join(
+      cluster_tile_summary,
+      by = c("AEZ", "original_cluster_id", "buffer_km")
+    ) %>%
+    mutate(
+      n_all_matched_tiles = replace_na(n_all_matched_tiles, 0L),
+      n_ha_matched_tiles = replace_na(n_ha_matched_tiles, 0L),
+      single_tile_has_ha = replace_na(single_tile_has_ha, FALSE),
+      collapse_to_single_tile = isTRUE(collapse_single_tile_clusters) &
+        n_all_matched_tiles == 1L,
+      analysis_unit_type = dplyr::if_else(
+        collapse_to_single_tile,
+        "single_tile",
+        "cluster"
+      ),
+      collapse_tile_id = dplyr::if_else(
+        collapse_to_single_tile,
+        single_tile_id,
+        NA_character_
+      ),
+      analysis_unit_id = dplyr::if_else(
+        collapse_to_single_tile,
+        paste0(as.character(AEZ), "_TILE_", collapse_tile_id),
+        original_cluster_id
+      )
+    ) %>%
+    dplyr::select(
+      AEZ,
+      buffer_km,
+      original_cluster_id,
+      analysis_unit_id,
+      analysis_unit_type,
+      collapse_tile_id,
+      collapse_to_single_tile
+    )
+
+  analysis_unit_buffer_country <- cluster_buffer_country_this %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        dplyr::select(AEZ, buffer_km, original_cluster_id, analysis_unit_id),
+      by = c("AEZ", "buffer_km", "original_cluster_id")
+    ) %>%
+    group_by(
+      AEZ,
+      cluster_id = analysis_unit_id,
+      buffer_km,
+      country_id,
+      country_iso3,
+      country_name,
+      country_name_long,
+      sovereign_name
+    ) %>%
+    summarise(
+      country_intersection_area_ha = sum(country_intersection_area_ha, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    group_by(AEZ, cluster_id, buffer_km) %>%
+    mutate(
+      normalized_country_overlap_share =
+        country_intersection_area_ha / sum(country_intersection_area_ha, na.rm = TRUE)
+    ) %>%
+    ungroup()
+
+  analysis_unit_country_summary <- analysis_unit_buffer_country %>%
+    arrange(
+      AEZ,
+      cluster_id,
+      buffer_km,
+      desc(normalized_country_overlap_share),
+      country_name
+    ) %>%
+    group_by(AEZ, cluster_id, buffer_km) %>%
+    summarise(
+      n_matched_countries = n_distinct(country_id),
+      primary_country_id = dplyr::first(country_id),
+      primary_country_iso3 = dplyr::first(country_iso3),
+      primary_country_name = dplyr::first(country_name),
+      primary_country_name_long = dplyr::first(country_name_long),
+      primary_sovereign_name = dplyr::first(sovereign_name),
+      primary_country_overlap_share = dplyr::first(normalized_country_overlap_share),
+      matched_country_ids = paste(sort(unique(country_id)), collapse = ";"),
+      matched_country_names = paste(sort(unique(country_name)), collapse = ";"),
+      .groups = "drop"
+    )
+
+  analysis_unit_summary <- analysis_unit_membership %>%
+    group_by(AEZ, cluster_id = analysis_unit_id, buffer_km) %>%
+    summarise(
+      analysis_unit_type = dplyr::first(analysis_unit_type),
+      collapse_tile_id = dplyr::first(collapse_tile_id),
+      n_member_clusters = n_distinct(original_cluster_id),
+      member_cluster_ids = paste(sort(unique(original_cluster_id)), collapse = ";"),
+      .groups = "drop"
+    ) %>%
+    left_join(
+      analysis_unit_country_summary,
+      by = c("AEZ", "cluster_id", "buffer_km")
+    )
+
+  analysis_unit_sites <- cluster_sites %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        dplyr::select(AEZ, original_cluster_id, analysis_unit_id, analysis_unit_type, collapse_tile_id),
+      by = c("AEZ", "original_cluster_id")
+    ) %>%
+    mutate(
+      cluster_id = analysis_unit_id
+    )
+
+  available_site_specs <- ov_score_specs %>%
+    filter(site_col %in% names(analysis_unit_sites))
+
+  if (!"ov_full" %in% available_site_specs$ov_method) {
+    stop("cluster_sites is missing the required full-OV site column for analysis-unit medians.", call. = FALSE)
+  }
+
+  median_exprs <- purrr::map(
+    available_site_specs$site_col,
+    ~ rlang::expr(median(.data[[!!.x]], na.rm = TRUE))
+  )
+  names(median_exprs) <- available_site_specs$cluster_year_col
+
+  analysis_unit_year_ov <- analysis_unit_sites %>%
+    st_drop_geometry() %>%
+    group_by(AEZ, cluster_id, year) %>%
+    summarise(
+      !!!median_exprs,
+      n_sites_year = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(AEZ, cluster_id, year)
+
+  analysis_unit_buffer_meta <- cluster_buffer_meta_original %>%
+    dplyr::select(
+      AEZ,
+      buffer_km,
+      original_cluster_id,
+      n_sites,
+      n_matched_tiles,
+      n_matched_tiles_with_ha,
+      n_matched_tiles_missing_ha,
+      tagged_any_tile,
+      tagged_ha_tile
+    ) %>%
+    inner_join(
+      analysis_unit_membership,
+      by = c("AEZ", "buffer_km", "original_cluster_id")
+    ) %>%
+    group_by(AEZ, cluster_id = analysis_unit_id, buffer_km) %>%
+    summarise(
+      n_sites = sum(n_sites, na.rm = TRUE),
+      n_matched_tiles = dplyr::if_else(
+        dplyr::first(analysis_unit_type) == "single_tile",
+        1L,
+        dplyr::first(n_matched_tiles)
+      ),
+      n_matched_tiles_with_ha = dplyr::if_else(
+        dplyr::first(analysis_unit_type) == "single_tile",
+        dplyr::first(n_matched_tiles_with_ha),
+        dplyr::first(n_matched_tiles_with_ha)
+      ),
+      n_matched_tiles_missing_ha = dplyr::if_else(
+        dplyr::first(analysis_unit_type) == "single_tile",
+        dplyr::first(n_matched_tiles_missing_ha),
+        dplyr::first(n_matched_tiles_missing_ha)
+      ),
+      tagged_any_tile = any(tagged_any_tile, na.rm = TRUE),
+      tagged_ha_tile = any(tagged_ha_tile, na.rm = TRUE),
+      analysis_unit_type = dplyr::first(analysis_unit_type),
+      collapse_tile_id = dplyr::first(collapse_tile_id),
+      n_member_clusters = n_distinct(original_cluster_id),
+      member_cluster_ids = paste(sort(unique(original_cluster_id)), collapse = ";"),
+      .groups = "drop"
+    ) %>%
+    left_join(
+      analysis_unit_country_summary,
+      by = c("AEZ", "cluster_id", "buffer_km")
+    ) %>%
+    mutate(
+      n_matched_countries = replace_na(n_matched_countries, 0L)
+    )
+
+  noncollapsed_tile <- cluster_buffer_tile_this %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        filter(!collapse_to_single_tile) %>%
+        dplyr::select(AEZ, buffer_km, original_cluster_id, analysis_unit_id, analysis_unit_type, collapse_tile_id),
+      by = c("AEZ", "buffer_km", "original_cluster_id")
+    ) %>%
+    mutate(cluster_id = analysis_unit_id) %>%
+    dplyr::select(
+      AEZ,
+      cluster_id,
+      buffer_km,
+      tile_id,
+      country_name,
+      has_ha_info,
+      intersection_area_ha,
+      normalized_overlap_share,
+      analysis_unit_type,
+      collapse_tile_id
+    )
+
+  collapsed_tile <- cluster_buffer_tile_this %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        filter(collapse_to_single_tile) %>%
+        dplyr::select(AEZ, buffer_km, original_cluster_id, analysis_unit_id, analysis_unit_type, collapse_tile_id),
+      by = c("AEZ", "buffer_km", "original_cluster_id")
+    ) %>%
+    group_by(AEZ, cluster_id = analysis_unit_id, buffer_km, tile_id, country_name, has_ha_info) %>%
+    summarise(
+      intersection_area_ha = sum(intersection_area_ha, na.rm = TRUE),
+      normalized_overlap_share = 1,
+      analysis_unit_type = dplyr::first(analysis_unit_type),
+      collapse_tile_id = dplyr::first(collapse_tile_id),
+      .groups = "drop"
+    )
+
+  analysis_unit_buffer_tile <- bind_rows(noncollapsed_tile, collapsed_tile) %>%
+    arrange(AEZ, cluster_id, buffer_km, tile_id)
+
+  noncollapsed_year_defor <- cluster_buffer_year_defor_this %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        filter(!collapse_to_single_tile) %>%
+        dplyr::select(AEZ, buffer_km, original_cluster_id, analysis_unit_id),
+      by = c("AEZ", "buffer_km", "original_cluster_id")
+    ) %>%
+    mutate(cluster_id = analysis_unit_id) %>%
+    dplyr::select(
+      AEZ,
+      cluster_id,
+      buffer_km,
+      year,
+      n_tiles_with_ha,
+      n_tiles,
+      defor_ha_total_raw,
+      defor_ha_total_avg,
+      defor_ha_total_rel_pct,
+      defor_ha_crops_raw,
+      defor_ha_crops_avg,
+      defor_ha_crops_rel_pct
+    )
+
+  collapsed_year_defor <- analysis_unit_buffer_tile %>%
+    filter(analysis_unit_type == "single_tile") %>%
+    distinct(AEZ, cluster_id, buffer_km, tile_id, has_ha_info) %>%
+    left_join(defor_tile_year, by = "tile_id", relationship = "many-to-many") %>%
+    group_by(AEZ, cluster_id, buffer_km, year) %>%
+    summarise(
+      n_tiles = n_distinct(tile_id),
+      n_tiles_with_ha = n_distinct(tile_id[has_ha_info %in% TRUE]),
+      defor_ha_total_raw = sum(defor_total_ha, na.rm = TRUE),
+      defor_ha_total_avg = defor_ha_total_raw / n_tiles,
+      defor_ha_total_rel_pct = sum(defor_total_ha, na.rm = TRUE),
+      defor_ha_crops_raw = sum(defor_crops_ha, na.rm = TRUE),
+      defor_ha_crops_avg = defor_ha_crops_raw / n_tiles,
+      defor_ha_crops_rel_pct = sum(defor_crops_ha, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  analysis_unit_year_defor <- bind_rows(noncollapsed_year_defor, collapsed_year_defor) %>%
+    arrange(AEZ, cluster_id, buffer_km, year)
+
+  analysis_unit_medoids <- cluster_medoids %>%
+    mutate(original_cluster_id = as.character(cluster_id)) %>%
+    inner_join(
+      analysis_unit_membership %>%
+        dplyr::select(AEZ, original_cluster_id, analysis_unit_id),
+      by = c("AEZ", "original_cluster_id")
+    ) %>%
+    group_by(AEZ, cluster_id = analysis_unit_id) %>%
+    summarise(
+      medoid_latitude = mean(medoid_latitude, na.rm = TRUE),
+      medoid_longitude = mean(medoid_longitude, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  list(
+    membership = analysis_unit_membership,
+    summary = analysis_unit_summary,
+    cluster_sites = analysis_unit_sites,
+    cluster_year_ov = analysis_unit_year_ov,
+    cluster_buffer_meta = analysis_unit_buffer_meta,
+    cluster_buffer_tile = analysis_unit_buffer_tile,
+    cluster_buffer_country = analysis_unit_buffer_country,
+    cluster_buffer_year_defor = analysis_unit_year_defor,
+    cluster_medoids = analysis_unit_medoids
+  )
+}
+
 build_year_pair_ov_table <- function(cluster_year_ov, ov_specs) {
   base <- cluster_year_ov %>%
     arrange(AEZ, cluster_id, year) %>%

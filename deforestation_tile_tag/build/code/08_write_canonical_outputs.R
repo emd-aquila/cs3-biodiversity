@@ -39,6 +39,11 @@ write_csv_safe(
 )
 
 write_csv_safe(
+  cluster_buffer_country,
+  file.path(canonical_tabular_dir, "matched_clusters_countries.csv")
+)
+
+write_csv_safe(
   cluster_buffer_year_defor %>%
     mutate(
       across(

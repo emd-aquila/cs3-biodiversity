@@ -30,6 +30,7 @@ if (length(missing_objects) > 0) {
 cluster_year_ov_path <- file.path(canonical_tabular_dir, "cluster_year_ov.csv")
 cluster_buffer_year_defor_path <- file.path(canonical_tabular_dir, "cluster_year_defor.csv")
 cluster_buffer_tile_path <- file.path(canonical_tabular_dir, "matched_clusters_tiles.csv")
+cluster_buffer_country_path <- file.path(canonical_tabular_dir, "matched_clusters_countries.csv")
 defor_tile_year_path <- file.path(canonical_tabular_dir, "defor_tile_year.csv")
 
 cluster_buffer_path <- file.path(canonical_spatial_dir, "cluster_buffer.gpkg")
@@ -39,6 +40,7 @@ defor_tile_geometry_path <- file.path(canonical_spatial_dir, "defor_tile_geometr
 assert_exists(cluster_year_ov_path)
 assert_exists(cluster_buffer_year_defor_path)
 assert_exists(cluster_buffer_tile_path)
+assert_exists(cluster_buffer_country_path)
 assert_exists(defor_tile_year_path)
 assert_exists(cluster_buffer_path)
 assert_exists(cluster_sites_path)
@@ -79,6 +81,7 @@ read_sf_safely <- function(path, temp_dir) {
 cluster_year_ov <- read_csv(cluster_year_ov_path, show_col_types = FALSE)
 cluster_buffer_year_defor <- read_csv(cluster_buffer_year_defor_path, show_col_types = FALSE)
 cluster_buffer_tile <- read_csv(cluster_buffer_tile_path, show_col_types = FALSE)
+cluster_buffer_country <- read_csv(cluster_buffer_country_path, show_col_types = FALSE)
 defor_tile_year <- read_csv(defor_tile_year_path, show_col_types = FALSE)
 
 # -----------------------
@@ -104,7 +107,7 @@ assert_has_cols(
 assert_has_cols(
   cluster_buffer_year_defor,
   c(
-    "AEZ", "cluster_id", "buffer_km", "year", "n_tiles_with_ha",
+    "AEZ", "cluster_id", "buffer_km", "year", "n_tiles", "n_tiles_with_ha",
     "defor_ha_total_raw", "defor_ha_total_avg", "defor_ha_total_rel_pct",
     "defor_ha_crops_raw", "defor_ha_crops_avg", "defor_ha_crops_rel_pct"
   ),
@@ -121,6 +124,16 @@ assert_has_cols(
 )
 
 assert_has_cols(
+  cluster_buffer_country,
+  c(
+    "AEZ", "cluster_id", "buffer_km", "country_id", "country_iso3",
+    "country_name", "country_name_long", "sovereign_name",
+    "country_intersection_area_ha", "normalized_country_overlap_share"
+  ),
+  "cluster_buffer_country"
+)
+
+assert_has_cols(
   defor_tile_year,
   c("tile_id", "year", "defor_total_ha", "defor_crops_ha", "defor_livestock_ha"),
   "defor_tile_year"
@@ -131,7 +144,8 @@ assert_has_cols(
   c(
     "AEZ", "cluster_id", "buffer_km", "n_sites", "n_matched_tiles",
     "n_matched_tiles_with_ha", "n_matched_tiles_missing_ha",
-    "tagged_any_tile", "tagged_ha_tile"
+    "tagged_any_tile", "tagged_ha_tile",
+    "n_matched_countries", "primary_country_id", "primary_country_name"
   ),
   "cluster_buffer"
 )
@@ -168,7 +182,9 @@ cluster_buffer_year_defor <- cluster_buffer_year_defor %>%
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
     buffer_km = as.numeric(buffer_km),
-    year = as.integer(year)
+    year = as.integer(year),
+    n_tiles = as.integer(n_tiles),
+    n_tiles_with_ha = as.integer(n_tiles_with_ha)
   )
 
 cluster_buffer_tile <- cluster_buffer_tile %>%
@@ -179,6 +195,20 @@ cluster_buffer_tile <- cluster_buffer_tile %>%
     tile_id = as.character(tile_id),
     intersection_area_ha = as.numeric(intersection_area_ha),
     normalized_overlap_share = as.numeric(normalized_overlap_share)
+  )
+
+cluster_buffer_country <- cluster_buffer_country %>%
+  mutate(
+    AEZ = standardize_aez_order(AEZ),
+    cluster_id = as.character(cluster_id),
+    buffer_km = as.numeric(buffer_km),
+    country_id = as.character(country_id),
+    country_iso3 = as.character(country_iso3),
+    country_name = as.character(country_name),
+    country_name_long = as.character(country_name_long),
+    sovereign_name = as.character(sovereign_name),
+    country_intersection_area_ha = as.numeric(country_intersection_area_ha),
+    normalized_country_overlap_share = as.numeric(normalized_country_overlap_share)
   )
 
 defor_tile_year <- defor_tile_year %>%
@@ -204,7 +234,14 @@ cluster_buffer <- cluster_buffer %>%
   mutate(
     AEZ = standardize_aez_order(AEZ),
     cluster_id = as.character(cluster_id),
-    buffer_km = as.numeric(buffer_km)
+    buffer_km = as.numeric(buffer_km),
+    n_matched_countries = as.integer(n_matched_countries),
+    primary_country_id = as.character(primary_country_id),
+    primary_country_iso3 = as.character(primary_country_iso3),
+    primary_country_name = as.character(primary_country_name),
+    primary_country_name_long = as.character(primary_country_name_long),
+    primary_sovereign_name = as.character(primary_sovereign_name),
+    primary_country_overlap_share = as.numeric(primary_country_overlap_share)
   )
 
 defor_tiles_all_sf <- defor_tile_geometry %>%
@@ -244,6 +281,7 @@ assert_has_cols(
 
 cluster_buffer_all <- cluster_buffer
 cluster_buffer_tile_all <- cluster_buffer_tile
+cluster_buffer_country_all <- cluster_buffer_country
 cluster_buffer_year_defor_all <- cluster_buffer_year_defor
 
 # -----------------------
@@ -256,6 +294,7 @@ if (exists("current_cluster_stub")) {
 }
 message("  cluster_year_ov rows: ", nrow(cluster_year_ov))
 message("  cluster_buffer rows: ", nrow(cluster_buffer))
+message("  cluster_buffer_country rows: ", nrow(cluster_buffer_country))
 message("  cluster_buffer_tile rows: ", nrow(cluster_buffer_tile))
 message("  cluster_buffer_year_defor rows: ", nrow(cluster_buffer_year_defor))
 message("  cluster_sites rows: ", nrow(cluster_sites))
