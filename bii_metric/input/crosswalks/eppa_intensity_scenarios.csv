@@ -1,0 +1,19 @@
+intensity_scenario,bii_class,intensity,intensity_share,assumption_note
+central,primary_other,minimal,1,Primary-natural land is minimally used in the central scenario.
+central,secondary,light,1,Central secondary-vegetation intensity assumption.
+central,plantation,intense,1,Central plantation intensity assumption.
+central,cropland,intense,1,Central cropland intensity assumption.
+central,pasture,light,1,Central pasture intensity assumption.
+central,urban,intense,1,Central urban intensity assumption.
+low,primary_other,minimal,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+low,secondary,minimal,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+low,plantation,light,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+low,cropland,light,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+low,pasture,minimal,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+low,urban,light,1,Illustrative low-use scenario; replace with EPPA-calibrated fractions.
+high,primary_other,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.
+high,secondary,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.
+high,plantation,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.
+high,cropland,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.
+high,pasture,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.
+high,urban,intense,1,Illustrative high-use scenario; replace with EPPA-calibrated fractions.

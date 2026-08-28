@@ -5,37 +5,90 @@
 .Ruserdata
 .RDataTmp
 *.RDataTmp*
+*.Rapp.history
+*.rda
+*.Rda
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Derived / generated files
-*.rds
+# Large tabular/cache artifacts
+*.csv
 *.tsv
+*.rds
+*.parquet
+*.feather
+*.fst
+*.qs
+
+# Download archives and sidecars
+*.zip
+*.gz
+*.bz2
+*.xz
+*.7z
+*.tar
+*.tar.gz
 *.json
 
-# Ignore CSVs by default
-*.csv
+# Spatial/raster outputs
 *.gpkg
+*.tif
+*.tiff
+*.vrt
+*.sqlite
+*.db
 
+# Downloaded environmental and protected-area source data. These are too large
+# for GitHub and can be recreated from the documented source downloads.
+*.nc
+*.gdb/
+**/wdpa_page_cache/
+**/wdpca_download_parts/
+**/deforestation/spatial/
+
+# Generated figures and reports
+*.png
+*.jpg
+*.jpeg
+*.pdf
 
 # Working directories
 **/data/
 **/name_files/
 **/old/
-**/checkpoints
+**/checkpoints/
 **/tmp/
+**/.tmp/
+
+# Generated pipeline data products
+**/raw_downloads/
+**/lookup_tables/
+**/predicts_info/
+**/biotime_info/
+**/overlap_info/
+**/output/
+
+# Local Python runtime and validation-only output for the LPD--Hansen workflow
+.venv/
+lpd_hansen/.venv/
+lpd_hansen/output_python/
+/run_lpd_hansen.txt
+
+# Downloaded local Hansen source data and Python bytecode caches
+00_spatial_data/hansen_forest_cover/rasters/
+00_spatial_data/hansen_forest_cover/hansen_tile_manifest.csv
+**/__pycache__/
+*.py[cod]
+
+# Old folder names
+00_old_code_archive
 
 # Keep folder structure
 **/input/.gitkeep
 **/output/.gitkeep
 **/tmp/.gitkeep
 
-# Allow only selected CSV outputs to be versioned
-!clustering/output/*.csv
-!predicts_ov_table/analysis/output/ov_AEZ_tag.csv
-!predicts_ov_table/build/output/pd_result.csv
-
-# Explicitly ignore very large generated file
-predicts_ov_table/build/output/predicts_filtered_2000_2024.csv
+# Versioned BII interface specifications; user-provided spatial inputs remain ignored.
+!bii_metric/input/crosswalks/*.csv

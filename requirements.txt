@@ -1,0 +1,36 @@
+# Core data analysis
+numpy
+pandas
+scipy
+
+# Visualisation and notebooks
+matplotlib
+seaborn
+jupyterlab
+ipykernel
+
+# Geospatial and raster processing
+geopandas
+shapely
+pyproj
+rasterio
+rioxarray
+affine
+
+# NetCDF and multidimensional environmental data
+netCDF4
+xarray
+
+# Statistical modelling
+pyfixest
+statsmodels
+
+# Data I/O and workflow utilities
+openpyxl
+requests
+certifi
+tqdm
+
+# Code quality and tests
+ruff
+pytest

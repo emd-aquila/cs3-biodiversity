@@ -1,0 +1,8 @@
+source_class,bii_class,allocation_share,intensity,scientific_note
+primary_minimal,primary_other,1,minimal,Only use where ancillary information supports minimally used primary vegetation.
+primary_other,primary_other,1,light,Primary vegetation with non-minimal human use.
+secondary,secondary,1,light,Collapsed secondary-vegetation age class; retain age data separately if available.
+plantation,plantation,1,intense,Managed plantation forest.
+cropland,cropland,1,intense,Cropland; revise intensity when a defensible intensity layer is available.
+pasture,pasture,1,light,Pasture; revise intensity when stocking or management data are available.
+urban,urban,1,intense,Urban land.

@@ -1,0 +1,6 @@
+source_class,bii_class,allocation_share,intensity,assumption_note
+primary,primary_other,1,minimal,LUH2 primary vegetation is treated as minimally used; this is a documented optimistic assumption.
+secondary,secondary,1,light,Initial intensity allocation for direct V2 comparison; replace with a Global-Land-Systems-calibrated allocator.
+cropland,cropland,1,intense,Initial intensity allocation for direct V2 comparison; replace with a Global-Land-Systems-calibrated allocator.
+pasture,pasture,1,light,Initial intensity allocation for direct V2 comparison; replace with a Global-Land-Systems-calibrated allocator.
+urban,urban,1,intense,Urban is assigned intense use.

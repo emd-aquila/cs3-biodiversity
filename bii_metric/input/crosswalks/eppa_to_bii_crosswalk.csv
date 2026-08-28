@@ -1,0 +1,7 @@
+source_class,bii_class,allocation_share,intensity,scientific_note
+eppa_primary_natural,primary_other,1,minimal,Replace source_class with the exact EPPA natural-primary sector name.
+eppa_secondary_natural,secondary,1,light,Replace source_class with the exact EPPA secondary-natural sector name.
+eppa_managed_forest,plantation,1,intense,Review carefully: managed forest is not always plantation forest.
+eppa_cropland,cropland,1,intense,Replace source_class with the exact EPPA crop sector name.
+eppa_pasture,pasture,1,light,Replace source_class with the exact EPPA pasture sector name.
+eppa_urban,urban,1,intense,Replace source_class with the exact EPPA urban-sector name.

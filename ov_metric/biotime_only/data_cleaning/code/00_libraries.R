@@ -1,0 +1,13 @@
+suppressPackageStartupMessages({
+  library(ape)
+  library(BioTIMEr)
+  library(data.table)
+  library(dplyr)
+  library(picante)
+  library(readr)
+  library(sf)
+  library(stringr)
+  library(stringi)
+  library(tibble)
+  library(tidyr)
+})

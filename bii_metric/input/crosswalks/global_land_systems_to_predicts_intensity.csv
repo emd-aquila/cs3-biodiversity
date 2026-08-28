@@ -1,0 +1,56 @@
+global_land_system_class,bii_class,intensity,source
+Cropland extensive with few livestock,cropland,minimal,Newbold et al. 2015 Extended Data Table 2
+Cropland extensive with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Cropland extensive with bovines goats and sheep,cropland,minimal,Newbold et al. 2015 Extended Data Table 2
+Cropland extensive with bovines goats and sheep,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland extensive with pigs and poultry,cropland,minimal,Newbold et al. 2015 Extended Data Table 2
+Cropland extensive with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with few livestock,cropland,light,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with bovines goats and sheep,cropland,light,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with bovines goats and sheep,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with pigs and poultry,cropland,light,Newbold et al. 2015 Extended Data Table 2
+Cropland medium intensive with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with few livestock,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with bovines goats and sheep,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with bovines goats and sheep,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with pigs and poultry,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Cropland intensive with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and grassland with bovines goats and sheep,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and grassland with bovines goats and sheep,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and grassland with pigs and poultry,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and grassland with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland extensive and grassland with few livestock,cropland,minimal,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland extensive and grassland with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland medium intensive and grassland with few livestock,cropland,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland medium intensive and grassland with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland intensive and grassland with few livestock,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland intensive and grassland with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and forest with pigs and poultry,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland and forest with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland extensive and forest with few livestock,cropland,minimal,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland extensive and forest with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland medium intensive and forest with few livestock,cropland,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland medium intensive and forest with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland intensive and forest with few livestock,cropland,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic cropland intensive and forest with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Dense forest,primary_other,minimal,Newbold et al. 2015 Extended Data Table 2
+Dense forest,secondary,minimal,Newbold et al. 2015 Extended Data Table 2
+Open forest with few livestock,primary_other,light,Newbold et al. 2015 Extended Data Table 2
+Open forest with few livestock,secondary,light,Newbold et al. 2015 Extended Data Table 2
+Open forest with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Open forest with pigs and poultry,primary_other,intense,Newbold et al. 2015 Extended Data Table 2
+Open forest with pigs and poultry,secondary,intense,Newbold et al. 2015 Extended Data Table 2
+Open forest with pigs and poultry,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Mosaic grassland and forest,primary_other,minimal,Newbold et al. 2015 Extended Data Table 2
+Mosaic grassland and forest,secondary,minimal,Newbold et al. 2015 Extended Data Table 2
+Mosaic grassland and bare,primary_other,minimal,Newbold et al. 2015 Extended Data Table 2
+Mosaic grassland and bare,secondary,minimal,Newbold et al. 2015 Extended Data Table 2
+Natural grassland,primary_other,minimal,Newbold et al. 2015 Extended Data Table 2
+Natural grassland,secondary,minimal,Newbold et al. 2015 Extended Data Table 2
+Grassland with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Grassland with bovines goats and sheep,pasture,intense,Newbold et al. 2015 Extended Data Table 2
+Bare with few livestock,pasture,light,Newbold et al. 2015 Extended Data Table 2
+Peri-urban and villages,urban,minimal,Newbold et al. 2015 Extended Data Table 2
+Urban,urban,intense,Newbold et al. 2015 Extended Data Table 2
