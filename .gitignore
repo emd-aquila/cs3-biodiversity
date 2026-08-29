@@ -73,6 +73,7 @@ Thumbs.db
 # Local Python runtime and validation-only output for the LPD--Hansen workflow
 .venv/
 lpd_hansen/.venv/
+lpd_hansen/hansen_data/
 lpd_hansen/output_python/
 /run_lpd_hansen.txt
 

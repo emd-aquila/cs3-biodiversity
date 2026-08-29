@@ -1,30 +1,39 @@
-#!/usr/bin/env python3
-"""The code runs the regression analysis of the LPD against deforestation as calculated using the locally downloaded Hansen global forest change dataset. 
+"""The code runs the regression analysis of the LPD against deforestation as calculated using Hansen global forest change tiles.
 
 The steps are:
 1) prepare the LPD observations by making spatial buffers around each population coordinate pair
-2) Read locally stored Hansen pixels and determine which buffers overlap which Hansen tiles
+2) Identify the Hansen tiles needed for the buffers and download any that are missing
 3) Calculate annual forest stock and loss for each buffer
 4) Match forest loss over time to each population interval
 5) Fit regression models (local and AEZ-specific) and write tables and figures
 
-FOREST_COVER_THRESHOLD and BUFFER_KM_VALUES dictate which pixels are considered to be "forest" and how large of a buffer to draw around each population coordinate pair. 
+FOREST_COVER_THRESHOLD and BUFFER_KM_VALUES dictate which pixels are considered to be "forest" and how large of a buffer to draw around each population coordinate pair.
+
+When the raw Hansen store is incomplete, the script downloads only the tiles
+intersecting the generated buffers before continuing.
 """
 
 from __future__ import annotations
 
 # %% Imports and analysis settings
 
-import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import os
-import sys
+import shutil
+import ssl
+import time
+import urllib.request
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", str(Path("lpd_hansen/output") / ".matplotlib"))
+script_dir = Path(__file__).resolve().parent
+repo_root = script_dir.parent
+
+os.environ.setdefault("MPLCONFIGDIR", str(script_dir / "output" / ".matplotlib"))
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import geopandas as gpd
+import certifi
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -38,27 +47,13 @@ from shapely import make_valid
 from shapely.geometry import box, mapping
 
 
-parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument(
-    "--output-dir",
-    type=Path,
-    default=Path("lpd_hansen/output"),
-    help="Directory for tables, figures, buffers, and Hansen summaries.",
-)
-parser.add_argument(
-    "--hansen-csv",
-    type=Path,
-    default=None,
-    help="Use an existing locally calculated long Hansen summary instead of recalculating it.",
-)
-args = parser.parse_args()
-
-repo_root = Path(__file__).resolve().parents[1]
+# Input locations -- replace paths when running elsewhere
 lpd_csv = repo_root / "00_biodiversity_data/living_planet/LPD_2024_public.csv"
 aez_shapefile = repo_root / "00_spatial_data/aez/AEZ_shp_file.shp"
-hansen_data_dir = repo_root / "00_spatial_data/hansen_forest_cover"
 
-output_dir = args.output_dir
+# Local folders created by this script.
+hansen_data_dir = script_dir / "hansen_data"
+output_dir = script_dir / "output"
 table_dir = output_dir / "tables"
 figure_dir = output_dir / "figures"
 hansen_dir = output_dir / "hansen"
@@ -79,6 +74,11 @@ FIXED_EFFECTS = "population_id + interval_start_year"
 FOREST_COVER_THRESHOLD = 30.0
 BUFFER_KM_VALUES = [1.0]
 PRIMARY_BUFFER_KM = 1.0
+HANSEN_VERSION = "GFC-2025-v1.13"
+HANSEN_BASE_URL = f"https://storage.googleapis.com/earthenginepartners-hansen/{HANSEN_VERSION}"
+HANSEN_LAYERS = ("treecover2000", "lossyear", "datamask")
+HANSEN_DOWNLOAD_WORKERS = 2
+HANSEN_DOWNLOAD_TIMEOUT_SECONDS = 180
 
 timeseries_path = table_dir / "lpd_native_terrestrial_population_year.csv"
 intervals_path = table_dir / "lpd_native_terrestrial_intervals_2000_2020.csv"
@@ -88,9 +88,156 @@ hansen_path = hansen_dir / "hansen_location_year_forest.csv"
 exposure_path = table_dir / "lpd_hansen_interval_exposure.csv"
 
 
+def hansen_tile_id(north_edge: int, west_edge: int) -> str:
+    latitude = f"{abs(north_edge):02d}{'N' if north_edge >= 0 else 'S'}"
+    longitude = f"{abs(west_edge):03d}{'E' if west_edge >= 0 else 'W'}"
+    return f"{latitude}_{longitude}"
+
+
+def buffer_hansen_tile_ids(buffer_frame: gpd.GeoDataFrame) -> set[str]:
+    tile_ids = set()
+    for min_x, min_y, max_x, max_y in buffer_frame.geometry.bounds.itertuples(index=False, name=None):
+        north_edges = range(math.ceil(min_y / 10) * 10, math.ceil(max_y / 10) * 10 + 1, 10)
+        west_edges = range(math.floor(min_x / 10) * 10, math.floor(max_x / 10) * 10 + 1, 10)
+        tile_ids.update(hansen_tile_id(north, west) for north in north_edges for west in west_edges)
+    return tile_ids
+
+
+def manifest_file_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else repo_root / path
+
+
+def complete_hansen_tile_ids(manifest: pd.DataFrame, requested_tile_ids: set[str]) -> set[str]:
+    required_columns = {"tile_id", "layer", "local_path"}
+    if not required_columns.issubset(manifest.columns):
+        return set()
+
+    complete = set()
+    for tile_id, rows in manifest.loc[manifest["tile_id"].isin(requested_tile_ids)].groupby("tile_id"):
+        layer_paths = {row.layer: manifest_file_path(row.local_path) for row in rows.itertuples(index=False)}
+        if {"treecover2000", "datamask"}.issubset(layer_paths) and all(
+            layer_paths[layer].is_file() and layer_paths[layer].stat().st_size > 0
+            for layer in ("treecover2000", "datamask")
+        ):
+            complete.add(tile_id)
+    return complete
+
+
+def download_missing_hansen_tiles(requested_tile_ids: set[str]) -> pd.DataFrame:
+    """Fetch the source rasters needed for the supplied Hansen tile IDs."""
+    hansen_data_dir.mkdir(parents=True, exist_ok=True)
+    raster_dir = hansen_data_dir / "rasters"
+    manifest_path = hansen_data_dir / "hansen_tile_manifest.csv"
+    certificate_context = ssl.create_default_context(cafile=certifi.where())
+    manifest_rows = []
+
+    # The provider's file lists account for valid tiles where a lossyear
+    # raster is not published, avoiding requests for files that do not exist.
+    for layer in HANSEN_LAYERS:
+        list_url = f"{HANSEN_BASE_URL}/{layer}.txt"
+        with urllib.request.urlopen(
+            list_url,
+            context=certificate_context,
+            timeout=HANSEN_DOWNLOAD_TIMEOUT_SECONDS,
+        ) as response:
+            available_urls = [line.strip() for line in response.read().decode("utf-8").splitlines() if line.strip()]
+
+        for url in available_urls:
+            filename = url.rsplit("/", 1)[-1]
+            tile_id = "_".join(filename.removesuffix(".tif").split("_")[-2:])
+            if tile_id not in requested_tile_ids:
+                continue
+            latitude_code, longitude_code = tile_id.split("_")
+            north_edge = int(latitude_code[:-1]) * (1 if latitude_code.endswith("N") else -1)
+            west_edge = int(longitude_code[:-1]) * (1 if longitude_code.endswith("E") else -1)
+            local_path = raster_dir / layer / filename
+            manifest_rows.append(
+                {
+                    "version": HANSEN_VERSION,
+                    "layer": layer,
+                    "tile_id": tile_id,
+                    "north_edge": north_edge,
+                    "west_edge": west_edge,
+                    "url": url,
+                    "local_path": str(local_path),
+                    "downloaded": local_path.is_file() and local_path.stat().st_size > 0,
+                    "bytes": local_path.stat().st_size if local_path.is_file() else 0,
+                }
+            )
+
+    manifest = pd.DataFrame(manifest_rows)
+    if manifest.empty:
+        raise RuntimeError("No requested Hansen tiles were found in the official file lists.")
+    manifest.to_csv(manifest_path, index=False)
+
+    def download_one(row_number: int, row: pd.Series) -> str:
+        local_path = Path(row.local_path)
+        if local_path.is_file() and local_path.stat().st_size > 0:
+            return "already present"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = local_path.with_suffix(local_path.suffix + ".part")
+        if temporary_path.exists():
+            temporary_path.unlink()
+        for attempt in range(1, 4):
+            print(
+                f"Downloading Hansen file {row_number}/{len(manifest)}: "
+                f"{row.layer} {row.tile_id} (attempt {attempt}/3)",
+                flush=True,
+            )
+            try:
+                with urllib.request.urlopen(
+                    row.url,
+                    context=certificate_context,
+                    timeout=HANSEN_DOWNLOAD_TIMEOUT_SECONDS,
+                ) as response, temporary_path.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+                if temporary_path.stat().st_size == 0:
+                    raise RuntimeError("Received an empty file.")
+                temporary_path.replace(local_path)
+                return "downloaded"
+            except Exception:
+                if temporary_path.exists():
+                    temporary_path.unlink()
+                if attempt == 3:
+                    raise
+                time.sleep(attempt)
+        raise RuntimeError(f"Could not download {row.url}")
+
+    missing_rows = [
+        (index + 1, row)
+        for index, row in manifest.iterrows()
+        if not (Path(row.local_path).is_file() and Path(row.local_path).stat().st_size > 0)
+    ]
+    if missing_rows:
+        print(f"Downloading {len(missing_rows)} Hansen file(s) for {len(requested_tile_ids)} buffer tile(s).")
+        with ThreadPoolExecutor(max_workers=HANSEN_DOWNLOAD_WORKERS) as executor:
+            futures = [executor.submit(download_one, index, row) for index, row in missing_rows]
+            failures = []
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as error:
+                    failures.append(str(error))
+        if failures:
+            raise RuntimeError(
+                f"{len(failures)} Hansen file download(s) failed after three attempts. "
+                f"Re-run the script to resume; first error: {failures[0]}"
+            )
+
+    manifest["downloaded"] = manifest["local_path"].map(
+        lambda value: Path(value).is_file() and Path(value).stat().st_size > 0
+    )
+    manifest["bytes"] = manifest["local_path"].map(
+        lambda value: Path(value).stat().st_size if Path(value).is_file() else 0
+    )
+    manifest.to_csv(manifest_path, index=False)
+    return manifest
+
+
 # %% 1. Prepare LPD observations, assign AEZs, and create spatial buffers
 
-# Check that files exist and meet expected amount o data
+# Check that the required inputs are present and have the expected size.
 if not lpd_csv.exists():
     raise FileNotFoundError(f"Missing LPD input: {lpd_csv}")
 if not aez_shapefile.exists():
@@ -276,167 +423,165 @@ print(f"Prepared {len(intervals):,} adjacent intervals from {intervals['populati
 print(f"Wrote Hansen point buffers: {buffers_path}")
 
 
-# %% 2. Identify the local Hansen tiles that overlap each buffer
+# %% 2. Identify and download the Hansen tiles that overlap each buffer
 
-if args.hansen_csv is None:
-    # The raw store is intentionally separate from LPD outputs. It contains
-    # continuous treecover2000, lossyear, and datamask rasters only, and so applying
-    # the forest threshold here leaves all source data reusable.
-    manifest_path = hansen_data_dir / "hansen_tile_manifest.csv"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Hansen manifest is missing: {manifest_path}")
-    hansen_manifest = pd.read_csv(manifest_path)
-    hansen_buffers = gpd.read_file(buffers_path).to_crs("EPSG:4326").reset_index(drop=True)
-    hansen_buffer_index = hansen_buffers.sindex
-    geod = Geod(ellps="WGS84")
+# The raw tiles are kept separately from LPD outputs. They contain continuous
+# treecover2000, lossyear, and datamask rasters, so the forest threshold is
+# applied later without modifying the source data.
+manifest_path = hansen_data_dir / "hansen_tile_manifest.csv"
+hansen_buffers = gpd.read_file(buffers_path).to_crs("EPSG:4326").reset_index(drop=True)
+hansen_buffer_index = hansen_buffers.sindex
+geod = Geod(ellps="WGS84")
+requested_tile_ids = buffer_hansen_tile_ids(hansen_buffers)
 
-    # Building the set of locally complete source tiles. The official download
-    # omits lossyear for tiles with no applicable loss layer; those pixels are
-    # correctly treated below as having lossyear == 0.
-    tile_paths = {}
-    for tile_id, tile_rows in hansen_manifest.groupby("tile_id"):
-        paths = {row.layer: Path(row.local_path) for row in tile_rows.itertuples(index=False)}
-        if {"treecover2000", "datamask"}.issubset(paths) and paths["treecover2000"].is_file() and paths["datamask"].is_file():
-            tile_paths[tile_id] = paths
-    if not tile_paths:
-        raise FileNotFoundError("No complete local Hansen treecover2000/datamask tiles were found.")
+existing_manifest = pd.read_csv(manifest_path) if manifest_path.exists() else pd.DataFrame()
+missing_tile_ids = requested_tile_ids - complete_hansen_tile_ids(existing_manifest, requested_tile_ids)
+if missing_tile_ids:
+    print(f"Downloading Hansen data for {len(missing_tile_ids)} missing buffer tile(s).")
+    download_missing_hansen_tiles(requested_tile_ids)
 
-    # Do not silently calculate partial buffers while the global download is
-    # incomplete. Every intersecting tile must be locally available first.
-    incomplete_tile_ids = []
-    for tile_row in hansen_manifest.loc[hansen_manifest["layer"] == "treecover2000"].itertuples(index=False):
-        if tile_row.tile_id in tile_paths:
-            continue
-        tile_geometry = box(tile_row.west_edge, tile_row.north_edge - 10, tile_row.west_edge + 10, tile_row.north_edge)
-        if list(hansen_buffer_index.query(tile_geometry, predicate="intersects")):
-            incomplete_tile_ids.append(tile_row.tile_id)
-    if incomplete_tile_ids:
-        raise RuntimeError(
-            "The local Hansen download is incomplete for these buffers. Resume the raw download; "
-            f"missing tiles include: {', '.join(sorted(incomplete_tile_ids)[:12])}."
-        )
-    tile_edges = hansen_manifest.groupby("tile_id")[["north_edge", "west_edge"]].first().to_dict("index")
+if not manifest_path.exists():
+    raise FileNotFoundError(f"Hansen manifest is missing: {manifest_path}")
+hansen_manifest = pd.read_csv(manifest_path)
+incomplete_tile_ids = requested_tile_ids - complete_hansen_tile_ids(hansen_manifest, requested_tile_ids)
+if incomplete_tile_ids:
+    raise RuntimeError(
+        "Hansen data remain incomplete for these buffers after the download: "
+        f"{', '.join(sorted(incomplete_tile_ids)[:12])}."
+    )
+
+# Keep only locally complete source tiles. The official download omits
+# lossyear for tiles with no applicable loss layer; those pixels are treated
+# below as having lossyear == 0.
+tile_paths = {}
+for tile_id, tile_rows in hansen_manifest.loc[hansen_manifest["tile_id"].isin(requested_tile_ids)].groupby("tile_id"):
+    paths = {row.layer: manifest_file_path(row.local_path) for row in tile_rows.itertuples(index=False)}
+    if {"treecover2000", "datamask"}.issubset(paths) and paths["treecover2000"].is_file() and paths["datamask"].is_file():
+        tile_paths[tile_id] = paths
+if not tile_paths:
+    raise FileNotFoundError("No complete local Hansen treecover2000/datamask tiles were found.")
+
+tile_edges = (
+    hansen_manifest.loc[hansen_manifest["tile_id"].isin(tile_paths)]
+    .groupby("tile_id")[["north_edge", "west_edge"]]
+    .first()
+    .to_dict("index")
+)
 
 
 # %% 3. Calculate annual forest stock and loss within each buffer
 
-if args.hansen_csv is not None:
-    if not args.hansen_csv.exists():
-        raise FileNotFoundError(f"Requested Hansen CSV does not exist: {args.hansen_csv}")
-    hansen_path.write_bytes(args.hansen_csv.read_bytes())
-    print(f"Copied existing Hansen summary: {args.hansen_csv}")
-else:
-    # Work tile-by-tile, so a GeoTIFF is opened once even when many buffers
-    # intersect it. Values in metrics are hectares; loss_by_year_code[8] is
-    # forest lost during calendar year 2008.
-    metrics = {
-        index: {"hansen_area_ha": 0.0, "baseline_forest_area_ha": 0.0, "loss_by_year_code": np.zeros(26)}
-        for index in hansen_buffers.index
-    }
-    buffers_with_data = {index: 0 for index in hansen_buffers.index}
+# Work tile-by-tile, so a GeoTIFF is opened once even when many buffers
+# intersect it. Values in metrics are hectares; loss_by_year_code[8] is
+# forest lost during calendar year 2008.
+metrics = {
+    index: {"hansen_area_ha": 0.0, "baseline_forest_area_ha": 0.0, "loss_by_year_code": np.zeros(26)}
+    for index in hansen_buffers.index
+}
+buffers_with_data = {index: 0 for index in hansen_buffers.index}
 
-    for tile_number, (tile_id, paths) in enumerate(sorted(tile_paths.items()), start=1):
-        north_edge = tile_edges[tile_id]["north_edge"]
-        west_edge = tile_edges[tile_id]["west_edge"]
-        tile_geometry = box(west_edge, north_edge - 10, west_edge + 10, north_edge)
-        candidate_indices = list(hansen_buffer_index.query(tile_geometry, predicate="intersects"))
-        if not candidate_indices:
-            continue
-        with rasterio.open(paths["treecover2000"]) as treecover, rasterio.open(paths["datamask"]) as datamask:
-            tile_geometry = box(*treecover.bounds)
-            loss_path = paths.get("lossyear")
-            loss_dataset = rasterio.open(loss_path) if loss_path and loss_path.is_file() else None
-            try:
-                if treecover.shape != datamask.shape or treecover.transform != datamask.transform:
-                    raise ValueError(f"treecover2000 and datamask are not aligned for {tile_id}.")
-                if loss_dataset and (treecover.shape != loss_dataset.shape or treecover.transform != loss_dataset.transform):
-                    raise ValueError(f"treecover2000 and lossyear are not aligned for {tile_id}.")
-                print(f"Reading local Hansen tile {tile_number}/{len(tile_paths)}: {tile_id}")
+for tile_number, (tile_id, paths) in enumerate(sorted(tile_paths.items()), start=1):
+    north_edge = tile_edges[tile_id]["north_edge"]
+    west_edge = tile_edges[tile_id]["west_edge"]
+    tile_geometry = box(west_edge, north_edge - 10, west_edge + 10, north_edge)
+    candidate_indices = list(hansen_buffer_index.query(tile_geometry, predicate="intersects"))
+    if not candidate_indices:
+        continue
+    with rasterio.open(paths["treecover2000"]) as treecover, rasterio.open(paths["datamask"]) as datamask:
+        tile_geometry = box(*treecover.bounds)
+        loss_path = paths.get("lossyear")
+        loss_dataset = rasterio.open(loss_path) if loss_path and loss_path.is_file() else None
+        try:
+            if treecover.shape != datamask.shape or treecover.transform != datamask.transform:
+                raise ValueError(f"treecover2000 and datamask are not aligned for {tile_id}.")
+            if loss_dataset and (treecover.shape != loss_dataset.shape or treecover.transform != loss_dataset.transform):
+                raise ValueError(f"treecover2000 and lossyear are not aligned for {tile_id}.")
+            print(f"Reading local Hansen tile {tile_number}/{len(tile_paths)}: {tile_id}")
 
-                for buffer_index_value in candidate_indices:
-                    buffer_geometry = hansen_buffers.geometry.iloc[buffer_index_value]
-                    overlap_geometry = buffer_geometry.intersection(tile_geometry)
-                    if overlap_geometry.is_empty:
-                        continue
-                    window = from_bounds(*overlap_geometry.bounds, transform=treecover.transform).round_offsets().round_lengths()
-                    window = window.intersection(Window(0, 0, treecover.width, treecover.height))
-                    if window.width <= 0 or window.height <= 0:
-                        continue
-                    window = Window(int(window.col_off), int(window.row_off), int(window.width), int(window.height))
+            for buffer_index_value in candidate_indices:
+                buffer_geometry = hansen_buffers.geometry.iloc[buffer_index_value]
+                overlap_geometry = buffer_geometry.intersection(tile_geometry)
+                if overlap_geometry.is_empty:
+                    continue
+                window = from_bounds(*overlap_geometry.bounds, transform=treecover.transform).round_offsets().round_lengths()
+                window = window.intersection(Window(0, 0, treecover.width, treecover.height))
+                if window.width <= 0 or window.height <= 0:
+                    continue
+                window = Window(int(window.col_off), int(window.row_off), int(window.width), int(window.height))
 
-                    # Rasterise the buffer onto a small N x N sub-pixel grid
-                    # and average it back to Hansen pixels. Thus interior
-                    # pixels have weight 1 and edge pixels have fractional
-                    # area, rather than being included/excluded wholesale.
-                    fine_transform = treecover.window_transform(window) * Affine.scale(1 / EDGE_SUBPIXELS, 1 / EDGE_SUBPIXELS)
-                    fine_shape = (int(window.height) * EDGE_SUBPIXELS, int(window.width) * EDGE_SUBPIXELS)
-                    overlap_fraction = rasterize(
-                        [(mapping(buffer_geometry), 1)], out_shape=fine_shape, transform=fine_transform,
-                        fill=0, all_touched=False, dtype="uint8",
-                    ).reshape(int(window.height), EDGE_SUBPIXELS, int(window.width), EDGE_SUBPIXELS).mean(axis=(1, 3))
-                    if not overlap_fraction.any():
-                        continue
+                # Rasterise the buffer onto a small N x N sub-pixel grid
+                # and average it back to Hansen pixels. Thus interior
+                # pixels have weight 1 and edge pixels have fractional
+                # area, rather than being included/excluded wholesale.
+                fine_transform = treecover.window_transform(window) * Affine.scale(1 / EDGE_SUBPIXELS, 1 / EDGE_SUBPIXELS)
+                fine_shape = (int(window.height) * EDGE_SUBPIXELS, int(window.width) * EDGE_SUBPIXELS)
+                overlap_fraction = rasterize(
+                    [(mapping(buffer_geometry), 1)], out_shape=fine_shape, transform=fine_transform,
+                    fill=0, all_touched=False, dtype="uint8",
+                ).reshape(int(window.height), EDGE_SUBPIXELS, int(window.width), EDGE_SUBPIXELS).mean(axis=(1, 3))
+                if not overlap_fraction.any():
+                    continue
 
-                    tree_cover = treecover.read(1, window=window)
-                    data_mask = datamask.read(1, window=window)
-                    loss_year = loss_dataset.read(1, window=window) if loss_dataset else np.zeros(tree_cover.shape, dtype=np.uint8)
-                    if np.any(loss_year > 25):
-                        raise ValueError(f"Unexpected lossyear code in {tile_id}.")
+                tree_cover = treecover.read(1, window=window)
+                data_mask = datamask.read(1, window=window)
+                loss_year = loss_dataset.read(1, window=window) if loss_dataset else np.zeros(tree_cover.shape, dtype=np.uint8)
+                if np.any(loss_year > 25):
+                    raise ValueError(f"Unexpected lossyear code in {tile_id}.")
 
-                    # The GeoTIFF is in longitude/latitude. Pixel width is
-                    # fixed, but true area changes by raster row, so calculate
-                    # geodesic area per row before applying edge fractions.
-                    window_transform = treecover.window_transform(window)
-                    row_areas_ha = []
-                    for row in range(int(window.height)):
-                        west, north = window_transform * (0, row)
-                        east, south = window_transform * (1, row + 1)
-                        area_m2, _ = geod.polygon_area_perimeter([west, east, east, west], [north, north, south, south])
-                        row_areas_ha.append(abs(area_m2) / 10_000)
-                    pixel_area_ha = overlap_fraction * np.asarray(row_areas_ha)[:, None]
+                # The GeoTIFF is in longitude/latitude. Pixel width is
+                # fixed, but true area changes by raster row, so calculate
+                # geodesic area per row before applying edge fractions.
+                window_transform = treecover.window_transform(window)
+                row_areas_ha = []
+                for row in range(int(window.height)):
+                    west, north = window_transform * (0, row)
+                    east, south = window_transform * (1, row + 1)
+                    area_m2, _ = geod.polygon_area_perimeter([west, east, east, west], [north, north, south, south])
+                    row_areas_ha.append(abs(area_m2) / 10_000)
+                pixel_area_ha = overlap_fraction * np.asarray(row_areas_ha)[:, None]
 
-                    land = data_mask == 1
-                    baseline_forest = land & (tree_cover >= FOREST_COVER_THRESHOLD)
-                    metrics[buffer_index_value]["hansen_area_ha"] += pixel_area_ha[land].sum()
-                    metrics[buffer_index_value]["baseline_forest_area_ha"] += pixel_area_ha[baseline_forest].sum()
-                    metrics[buffer_index_value]["loss_by_year_code"] += np.bincount(
-                        loss_year[baseline_forest], weights=pixel_area_ha[baseline_forest], minlength=26,
-                    )[:26]
-                    buffers_with_data[buffer_index_value] += 1
-            finally:
-                if loss_dataset:
-                    loss_dataset.close()
+                land = data_mask == 1
+                baseline_forest = land & (tree_cover >= FOREST_COVER_THRESHOLD)
+                metrics[buffer_index_value]["hansen_area_ha"] += pixel_area_ha[land].sum()
+                metrics[buffer_index_value]["baseline_forest_area_ha"] += pixel_area_ha[baseline_forest].sum()
+                metrics[buffer_index_value]["loss_by_year_code"] += np.bincount(
+                    loss_year[baseline_forest], weights=pixel_area_ha[baseline_forest], minlength=26,
+                )[:26]
+                buffers_with_data[buffer_index_value] += 1
+        finally:
+            if loss_dataset:
+                loss_dataset.close()
 
-    if not all(buffers_with_data.values()):
-        raise RuntimeError("At least one LPD buffer did not overlap a local Hansen tile.")
+if not all(buffers_with_data.values()):
+    raise RuntimeError("At least one LPD buffer did not overlap a local Hansen tile.")
 
-    # Write one annual row per buffer. A 2008 loss is a 2008 flow and is
-    # excluded from forest_area_remaining_ha in 2008, matching the stated
-    # binary forest reconstruction (not an annual canopy-cover measurement).
-    annual_rows = []
-    for buffer_index_value, buffer_row in hansen_buffers.iterrows():
-        metric = metrics[buffer_index_value]
-        cumulative_loss = 0.0
-        for year in range(2000, 2026):
-            annual_defor_ha = metric["loss_by_year_code"][year - 2000] if year > 2000 else 0.0
-            cumulative_loss += annual_defor_ha
-            forest_area_remaining_ha = max(metric["baseline_forest_area_ha"] - cumulative_loss, 0.0)
-            annual_rows.append(
-                {
-                    "location_id": buffer_row.location_id,
-                    "buffer_km": buffer_row.buffer_km,
-                    "year": year,
-                    "forest_cover_threshold_pct": FOREST_COVER_THRESHOLD,
-                    "hansen_area_ha": metric["hansen_area_ha"],
-                    "baseline_forest_area_ha": metric["baseline_forest_area_ha"],
-                    "forest_area_remaining_ha": forest_area_remaining_ha,
-                    "forest_cover_pct": 100 * forest_area_remaining_ha / metric["hansen_area_ha"] if metric["hansen_area_ha"] else np.nan,
-                    "annual_defor_ha": annual_defor_ha,
-                    "edge_subpixels": EDGE_SUBPIXELS,
-                }
-            )
-    pd.DataFrame(annual_rows).sort_values(["location_id", "buffer_km", "year"]).to_csv(hansen_path, index=False)
-    print(f"Wrote local Hansen forest summary: {hansen_path}")
+# Write one annual row per buffer. A 2008 loss is a 2008 flow and is
+# excluded from forest_area_remaining_ha in 2008, matching the stated
+# binary forest reconstruction (not an annual canopy-cover measurement).
+annual_rows = []
+for buffer_index_value, buffer_row in hansen_buffers.iterrows():
+    metric = metrics[buffer_index_value]
+    cumulative_loss = 0.0
+    for year in range(2000, 2026):
+        annual_defor_ha = metric["loss_by_year_code"][year - 2000] if year > 2000 else 0.0
+        cumulative_loss += annual_defor_ha
+        forest_area_remaining_ha = max(metric["baseline_forest_area_ha"] - cumulative_loss, 0.0)
+        annual_rows.append(
+            {
+                "location_id": buffer_row.location_id,
+                "buffer_km": buffer_row.buffer_km,
+                "year": year,
+                "forest_cover_threshold_pct": FOREST_COVER_THRESHOLD,
+                "hansen_area_ha": metric["hansen_area_ha"],
+                "baseline_forest_area_ha": metric["baseline_forest_area_ha"],
+                "forest_area_remaining_ha": forest_area_remaining_ha,
+                "forest_cover_pct": 100 * forest_area_remaining_ha / metric["hansen_area_ha"] if metric["hansen_area_ha"] else np.nan,
+                "annual_defor_ha": annual_defor_ha,
+                "edge_subpixels": EDGE_SUBPIXELS,
+            }
+        )
+pd.DataFrame(annual_rows).sort_values(["location_id", "buffer_km", "year"]).to_csv(hansen_path, index=False)
+print(f"Wrote local Hansen forest summary: {hansen_path}")
 
 
 # %% 4. Match annual Hansen forest loss to each population interval
