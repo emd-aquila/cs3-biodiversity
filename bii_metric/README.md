@@ -266,3 +266,147 @@ contains aggregate BII maps rather than taxon-specific layers, so it can test
 the aggregate model and geographic aggregation, but cannot validate our
 Mammal, Bird, Amphibian, Reptile, Invertebrate, Plant, or Fungi response
 functions individually.
+
+## AEZ x transition deforestation matrix (EPPA coupling)
+
+`run_aez_deforestation_matrix.R` turns the PREDICTS intactness responses into
+the coefficient an economic model needs:
+
+> *X additional hectares converted from forest class f to land use l in AEZ a
+> change the AEZ's mean biodiversity intactness by Y %.*
+
+It reuses the site table built by `code/03_prepare_predicts.R` (relative total
+abundance per PREDICTS site, land use x intensity -> pressure class), assigns
+every site to an AEZ (`00_spatial_data/aez/AEZ_shp_file.shp`), fits the same
+abundance model as the main BII workflow,
+`sqrt(relative abundance) ~ pressure_class + (1|study) + (1|block)`, **per
+AEZ**, and converts the fitted class responses into transition effects.
+
+Definitions (B = intactness relative to minimally used primary vegetation):
+
+| Quantity | Formula | File |
+|---|---|---|
+| Class response | B[a, l] | `aez_class_response.csv` |
+| Local effect of converting one hectare | 100 x (B[a, l] / B[a, f] - 1) | `aez_transition_local_effect.csv` |
+| AEZ-mean effect per hectare | 100 x (B[a, l] - B[a, f]) / AEZ area (ha) | `aez_deforestation_matrix.csv`, `_wide.csv` |
+
+so that `Y % = X ha x delta_pct_per_ha`. The AEZ-mean coefficient is linear in
+hectares (a marginal effect for small changes) and scales with 1 / AEZ area.
+
+Pooling: an AEZ-specific estimate is used when the AEZ has at least
+`CS3_AEZ_MIN_SITES` sites (default 150) from `CS3_AEZ_MIN_STUDIES` studies
+(default 8) and the class has at least `CS3_AEZ_MIN_CLASS_SITES` sites (25)
+from `CS3_AEZ_MIN_CLASS_STUDIES` studies (3); otherwise the class falls back
+to the AEZ climate group (AEZ1-6 tropical, AEZ7-12 temperate, AEZ13-18
+boreal) and then to the global model. Every output row records its
+`provenance`. Confidence intervals are study-level (cluster) bootstrap
+percentiles (`CS3_AEZ_NBOOT`, default 200).
+
+### What comes from where
+
+- Data: the raw PREDICTS extract (2016 + November 2022 releases) at
+  `00_biodiversity_data/predicts/predicts_database_raw.rds` (see step 2) and
+  the AEZ shapefile already in the repository. No BioTIME, Hansen or Earth
+  Engine inputs are needed: deforestation enters only as the hectares you
+  multiply the matrix by.
+- Reused unchanged: `code/00_libraries.R`, `code/01_config.R`,
+  `code/02_helpers.R` (`prepare_predicts_records()`, `predict_no_random_effects()`),
+  `code/03_prepare_predicts.R`.
+- New: `run_aez_deforestation_matrix.R` (entry point) and
+  `code/22_aez_deforestation_matrix.R` (AEZ assignment, per-AEZ models,
+  pooling, bootstrap, transition tables, optional EPPA evaluation), plus the
+  templates in `input/eppa/`.
+
+### How to run
+
+1. Install packages once (in R):
+
+   ```r
+   install.packages(c("data.table", "dplyr", "readr", "ggplot2", "stringr", "sf", "lme4", "predictsr"))
+   ```
+
+2. Download the PREDICTS extract once (in an interactive R session, working
+   directory = repository root; the NHM portal refuses non-interactive
+   downloads):
+
+   ```r
+   dir.create("00_biodiversity_data/predicts", recursive = TRUE, showWarnings = FALSE)
+   predicts <- predictsr::LoadPredictsData(
+     file_predicts = "00_biodiversity_data/predicts/predicts_database_raw.rds",
+     extract = c(2016, 2022)
+   )
+   saveRDS(as.data.frame(predicts), "00_biodiversity_data/predicts/predicts_database_raw.rds", compress = "gzip")
+   ```
+
+3. Quick run, point estimates only (a few minutes), from the repository root:
+
+   ```sh
+   CS3_AEZ_NBOOT=0 Rscript bii_metric/run_aez_deforestation_matrix.R
+   ```
+
+   On Windows PowerShell:
+
+   ```powershell
+   $env:CS3_AEZ_NBOOT = "0"
+   Rscript bii_metric\run_aez_deforestation_matrix.R
+   ```
+
+   Inspect `output/aez_matrix/aez_site_coverage.csv` and
+   `aez_matrix_model_diagnostics.csv` to see which AEZs were fitted on their
+   own and which fell back.
+
+4. Full run with bootstrap confidence intervals (one to a few hours):
+
+   ```sh
+   CS3_AEZ_NBOOT=200 Rscript bii_metric/run_aez_deforestation_matrix.R
+   ```
+
+The first run also executes `code/03_prepare_predicts.R` if
+`tmp/predicts_site_abundance.rds` does not exist yet.
+
+### Outputs (`output/aez_matrix/`)
+
+| File | Content |
+|---|---|
+| `aez_site_coverage.csv` | sites and studies per AEZ x pressure class x taxon group |
+| `aez_class_response.csv` | B[a, l] per AEZ and class with CI, n sites/studies, provenance |
+| `aez_scope_responses.csv` | every fitted scope (AEZ, group, global) before pooling |
+| `aez_transition_local_effect.csv` | % change per converted hectare, with CI |
+| `aez_deforestation_matrix.csv` | long form: % of AEZ-mean intactness per ha and per 1,000 ha, with CI and provenance |
+| `aez_deforestation_matrix_wide.csv` | **the matrix**: AEZ x transition, % per 1,000 ha |
+| `aez_land_area_ha.csv` | AEZ land areas from the shapefile (equal-area projection) |
+| `aez_matrix_model_diagnostics.csv` | fitted / skipped scopes, singularity and convergence flags |
+| `aez_region_deforestation_matrix.csv` | per EPPA region x AEZ, only if `input/eppa/eppa_aez_area_ha.csv` is supplied |
+| `aez_scenario_evaluation.csv` | delta % and intactness-hectares per scenario/year/region/AEZ, only if `input/eppa/eppa_aez_transitions.csv` is supplied |
+
+### Options (environment variables)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CS3_AEZ_NBOOT` | 200 | bootstrap replicates; 0 = point estimates only |
+| `CS3_AEZ_INCLUDE_COMPOSITION` | auto | `true` multiplies the abundance response by the compositional-similarity response (full BII logic); needs the pair cache written by `run_bii_analysis.R` |
+| `CS3_AEZ_TAXON_SCOPES` | all | e.g. `all,Birds,Plants,Invertebrates` for taxon-specific matrices |
+| `CS3_AEZ_MIN_SITES`, `CS3_AEZ_MIN_STUDIES`, `CS3_AEZ_MIN_CLASS_SITES`, `CS3_AEZ_MIN_CLASS_STUDIES` | 150, 8, 25, 3 | pooling thresholds |
+
+### Optional EPPA inputs
+
+Copy `input/eppa/eppa_aez_area_ha.template.csv` to `eppa_aez_area_ha.csv`
+(`region, aez, area_ha`) to obtain the matrix diluted by EPPA's own region x
+AEZ areas, and `input/eppa/eppa_aez_transitions.template.csv` to
+`eppa_aez_transitions.csv` (`scenario, year, region, aez, from_class,
+to_class, area_ha`) to evaluate a scenario directly. Class names must be the
+BII classes: `primary_minimal`, `primary_other`, `secondary`, `plantation`,
+`cropland`, `pasture`, `urban`. When aggregating across AEZs or regions use
+the local effect and the intactness-hectares column rather than the
+per-hectare AEZ-mean coefficient, which depends on the AEZ area definition.
+
+### Interpretation and limits
+
+The coefficients are space-for-time contrasts within PREDICTS studies
+(sites in different land uses sampled with the same protocol), i.e. the
+immediate local abundance consequence of a hectare being in land use l
+instead of forest. They do not include delayed extinctions (extinction debt)
+or landscape effects on remaining forest; for the delayed species-loss
+dimension see the ecoregion characterization factors of Chaudhary et al.
+(2015) and Chaudhary & Brooks (2018). Deforestation hectares (from EPPA or
+from Hansen) are the multiplier, not an input to the estimation.

@@ -1,0 +1,4 @@
+scenario,year,region,aez,from_class,to_class,area_ha
+reference,2030,BRA,AEZ5,primary_minimal,cropland,250000
+reference,2030,BRA,AEZ5,primary_minimal,pasture,400000
+reference,2030,BRA,AEZ6,secondary,cropland,120000
