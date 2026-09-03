@@ -305,7 +305,7 @@ percentiles (`CS3_AEZ_NBOOT`, default 200).
 ### What comes from where
 
 - Data: the raw PREDICTS extract (2016 + November 2022 releases) at
-  `00_biodiversity_data/predicts/predicts_database_raw.rds` (see step 2) and
+  `00_biodiversity_data/predicts/predicts_database_raw.rds` (see step 1) and
   the AEZ shapefile already in the repository. No BioTIME, Hansen or Earth
   Engine inputs are needed: deforestation enters only as the hectares you
   multiply the matrix by.
@@ -378,6 +378,21 @@ The first run also executes `code/03_prepare_predicts.R` if
 | `aez_matrix_model_diagnostics.csv` | fitted / skipped scopes, singularity and convergence flags |
 | `aez_region_deforestation_matrix.csv` | per EPPA region x AEZ, only if `input/eppa/eppa_aez_area_ha.csv` is supplied |
 | `aez_scenario_evaluation.csv` | delta % and intactness-hectares per scenario/year/region/AEZ, only if `input/eppa/eppa_aez_transitions.csv` is supplied |
+
+### Figures
+
+Every run also writes four PNG figures to `output/aez_matrix/` (re-draw them
+alone with `Rscript bii_metric/run_aez_matrix_figures.R`):
+
+| Figure | Content |
+|---|---|
+| `fig1_local_effect_heatmap_<scope>.png` | AEZ x transition heatmap of the % change per converted hectare (red = loss, blue = gain); `(p)` marks contrasts that use a pooled model, `*` marks CIs excluding zero |
+| `fig2_class_response_<scope>.png` | intactness of each land-use class per AEZ with bootstrap CIs; filled = AEZ-specific, open = pooled |
+| `fig3_coverage_<scope>.png` | number of PREDICTS studies (sites) behind each AEZ x class cell |
+| `fig4_aez_mean_effect_<scope>.png` | the AEZ-mean matrix, % of the AEZ's mean intactness per million ha converted |
+
+Read them in that order: a cell in fig1 is only as good as its data in fig3 and
+its interval in fig2.
 
 ### Options (environment variables)
 

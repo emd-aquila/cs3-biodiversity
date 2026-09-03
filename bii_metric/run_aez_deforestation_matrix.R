@@ -30,3 +30,7 @@ if (!file.exists(predicts_site_path)) {
 source("22_aez_deforestation_matrix.R")
 
 run_aez_deforestation_matrix()
+
+# Figures (can be re-drawn alone with run_aez_matrix_figures.R)
+source("23_aez_matrix_figures.R")
+tryCatch(plot_aez_matrix_figures(aez_matrix_output_dir), error = function(e) warning("Figures skipped: ", conditionMessage(e), call. = FALSE))
